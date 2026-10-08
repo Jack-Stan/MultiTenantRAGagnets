@@ -1,0 +1,6 @@
+@MultiTenantRAGagnets.Api_HostAddress = http://localhost:5259
+
+GET {{MultiTenantRAGagnets.Api_HostAddress}}/health
+Accept: application/json
+
+###

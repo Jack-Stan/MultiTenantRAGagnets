@@ -1,0 +1,46 @@
+# Local dev stack.
+#   docker compose up -d                      -> Postgres 16 + pgvector only (what CI-style runs need)
+#   docker compose --profile ollama up -d     -> also starts Ollama (heavy image, never used in CI)
+#
+# Credentials come from the environment (copy .env.example to .env). Nothing secret is
+# committed; compose refuses to start if POSTGRES_PASSWORD is unset.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: mtra-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD (copy .env.example to .env)}
+      POSTGRES_DB: ${POSTGRES_DB:-mtra}
+      # Read by db/migrations/003_app_user_password.sh to set the non-owner app role's password.
+      APP_USER_PASSWORD: ${APP_USER_PASSWORD:?Set APP_USER_PASSWORD (copy .env.example to .env)}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Only db/migrations is mounted: the entrypoint does not recurse into subfolders, and
+      # db/down and db/tests must never run at init. Files run once, in filename order, on
+      # first initialisation of an empty data volume. Reset with: docker compose down -v
+      - ./db/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-mtra}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: mtra-ollama
+    profiles: ["ollama"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+    # After first start, pull the models once:
+    #   docker compose exec ollama ollama pull nomic-embed-text
+    #   docker compose exec ollama ollama pull llama3.2
+
+volumes:
+  pgdata:
+  ollama:

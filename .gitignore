@@ -1,0 +1,36 @@
+## .NET
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+*.user
+*.suo
+*.userprefs
+.vs/
+.vscode/
+.idea/
+*.log
+TestResults/
+*.trx
+coverage*.xml
+coverage/
+*.nupkg
+project.lock.json
+launchSettings.local.json
+
+## Secrets and local config: never commit
+.env
+.env.*
+!.env.example
+appsettings.*.local.json
+secrets.json
+*.pfx
+*.pem
+*.key
+
+## OS
+.DS_Store
+Thumbs.db
+
+## Local eval output (the committed results file is whitelisted explicitly when it exists)
+/results/*.tmp
