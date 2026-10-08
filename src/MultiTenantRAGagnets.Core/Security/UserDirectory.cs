@@ -8,18 +8,29 @@ namespace MultiTenantRAGagnets.Core.Security;
 /// the request-path <c>app_user</c> connection: tenants/users are tenant-scoped under RLS, so an unset
 /// context sees nothing (by design, fail-closed).
 ///
-/// Chosen approach (simplest safe one, documented as a decision): the lookup uses a SEPARATE connection
-/// string, <c>ConnectionStrings:Identity</c>, used only by the dev token-issuing endpoint, which is off unless
-/// <c>Auth:DevTokenIssuer:Enabled=true</c>. It must never be the request-path connection and never be
-/// reachable from /query, /ingest or /audit. Locally it can point at the owner; the better target is a
-/// dedicated role with SELECT on tenants and users only (a db/ change, requested from RÓISÍN).
+/// The lookup uses a SEPARATE connection string, <c>ConnectionStrings:Identity</c>, which must log in as the
+/// <c>identity_reader</c> role (db/migrations/004_identity_role.sql). That role holds no table privileges; its
+/// only privilege is EXECUTE on <c>public.rag_resolve_user(slug, email)</c>, a SECURITY DEFINER function that
+/// returns zero rows for an unknown tenant and for an unknown user alike. It is used only by the dev
+/// token-issuing endpoint (off unless <c>Auth:DevTokenIssuer:Enabled=true</c>, Development only) and must never
+/// be the request-path connection or be reachable from /query, /ingest or /audit.
 /// </summary>
 public interface IUserDirectory
 {
     Task<AuthenticatedUser?> FindAsync(string tenantSlug, string email, CancellationToken cancellationToken = default);
 }
 
-/// <summary>UNVERIFIED against a real database. Parameterised; returns null (not an error) for an unknown pair.</summary>
+/// <summary>The one statement the identity connection runs. Pinned by a unit test, like <c>RetrievalSql</c>.</summary>
+internal static class UserDirectorySql
+{
+    public const string ResolveUser = "SELECT user_id, tenant_id, role FROM public.rag_resolve_user(@slug, @email)";
+}
+
+/// <summary>
+/// UNVERIFIED against a real database (CI runs db/tests/10_identity_reader.sql, not this class).
+/// Parameterised; returns null (not an error) when the function yields zero rows. Matching is exact: the
+/// function does no case folding or trimming, so callers normalise.
+/// </summary>
 public sealed class NpgsqlUserDirectory : IUserDirectory
 {
     private readonly NpgsqlDataSource _identitySource;
@@ -34,13 +45,7 @@ public sealed class NpgsqlUserDirectory : IUserDirectory
         ArgumentException.ThrowIfNullOrWhiteSpace(tenantSlug);
         ArgumentException.ThrowIfNullOrWhiteSpace(email);
 
-        await using var cmd = _identitySource.CreateCommand(
-            """
-            SELECT u.id, u.tenant_id, u.role
-            FROM users u
-            JOIN tenants t ON t.id = u.tenant_id
-            WHERE t.slug = @slug AND u.email = @email
-            """);
+        await using var cmd = _identitySource.CreateCommand(UserDirectorySql.ResolveUser);
         cmd.Parameters.AddWithValue("slug", NpgsqlDbType.Text, tenantSlug);
         cmd.Parameters.AddWithValue("email", NpgsqlDbType.Text, email);
 

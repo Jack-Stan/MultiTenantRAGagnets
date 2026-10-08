@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
@@ -26,12 +27,40 @@ builder.Services.AddRagCore(builder.Configuration);
 var devTokenIssuerEnabled = builder.Configuration.GetValue<bool>("Auth:DevTokenIssuer:Enabled");
 if (devTokenIssuerEnabled)
 {
+    if (!builder.Environment.IsDevelopment())
+        throw new InvalidOperationException(
+            "Auth:DevTokenIssuer:Enabled is true but the environment is not Development. " +
+            "The dev token issuer mints a token for any seeded user and must never run anywhere else.");
+
     var identityConnection = builder.Configuration.GetConnectionString("Identity");
     if (string.IsNullOrWhiteSpace(identityConnection))
         throw new InvalidOperationException(
             "Auth:DevTokenIssuer:Enabled is true but ConnectionStrings:Identity is not set. " +
-            "It is the separate (non-request-path) connection used only to look users up before a tenant is known.");
+            "It is the separate (non-request-path) connection used only to look users up before a tenant is known; " +
+            "it must log in as the identity_reader role (Username=identity_reader), never as the owner or app_user.");
     builder.Services.AddSingleton<IUserDirectory>(_ => new NpgsqlUserDirectory(NpgsqlDataSource.Create(identityConnection)));
+
+    // The database does no throttling of the lookup, so the endpoint does: fixed window per client IP.
+    // Behind a reverse proxy RemoteIpAddress is the proxy unless forwarded headers are configured; this
+    // endpoint is Development-only, so that is acceptable here.
+    var permitLimit = builder.Configuration.GetValue<int?>("Auth:DevTokenIssuer:PermitLimit") ?? 10;
+    var windowSeconds = builder.Configuration.GetValue<int?>("Auth:DevTokenIssuer:WindowSeconds") ?? 60;
+    if (permitLimit < 1 || windowSeconds < 1)
+        throw new InvalidOperationException("Auth:DevTokenIssuer:PermitLimit and WindowSeconds must be at least 1.");
+    builder.Services.AddRateLimiter(o =>
+    {
+        o.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+        o.AddPolicy(DevTokenRateLimit.PolicyName, httpContext =>
+            RateLimitPartition.GetFixedWindowLimiter(
+                httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+                _ => new FixedWindowRateLimiterOptions
+                {
+                    PermitLimit = permitLimit,
+                    Window = TimeSpan.FromSeconds(windowSeconds),
+                    QueueLimit = 0,
+                    AutoReplenishment = true,
+                }));
+    });
 }
 
 builder.Services
@@ -75,6 +104,8 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
+if (devTokenIssuerEnabled) app.UseRateLimiter();
+
 app.UseAuthentication();
 app.UseAuthorization();
 
@@ -96,7 +127,8 @@ if (devTokenIssuerEnabled)
         return Results.Ok(new DevTokenResponse(jwt.Issue(user), jwtOptions.Value.LifetimeMinutes));
     })
     .WithTags("Auth (dev only)")
-    .AllowAnonymous();
+    .AllowAnonymous()
+    .RequireRateLimiting(DevTokenRateLimit.PolicyName);
 }
 
 app.MapPost("/query", async (QueryRequest req, ClaimsPrincipal principal, RetrievalService retrieval, CancellationToken ct) =>
@@ -149,6 +181,11 @@ namespace MultiTenantRAGagnets.Api
     {
         /// <summary>Top of the hierarchy in db/migrations/001_schema.sql; the only role allowed to ingest and read /audit.</summary>
         public const string HrAdmin = "hr-admin";
+    }
+
+    public static class DevTokenRateLimit
+    {
+        public const string PolicyName = "dev-token";
     }
 
     public static class Policies

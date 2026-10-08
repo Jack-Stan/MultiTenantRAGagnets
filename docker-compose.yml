@@ -15,6 +15,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-mtra}
       # Read by db/migrations/003_app_user_password.sh to set the non-owner app role's password.
       APP_USER_PASSWORD: ${APP_USER_PASSWORD:?Set APP_USER_PASSWORD (copy .env.example to .env)}
+      # Read by db/migrations/004_identity_user_password.sh to set the identity_reader login's password.
+      IDENTITY_USER_PASSWORD: ${IDENTITY_USER_PASSWORD:?Set IDENTITY_USER_PASSWORD (copy .env.example to .env)}
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:

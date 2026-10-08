@@ -30,6 +30,8 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     public string? SigningKey { get; init; } = JwtKey;
     public string Environment { get; init; } = "Development";
     public bool DevIssuer { get; init; } = true;
+    public int? DevTokenPermitLimit { get; init; }
+    public bool OmitDevIssuerSetting { get; init; }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -37,8 +39,9 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         if (SigningKey is not null) builder.UseSetting("Jwt:SigningKey", SigningKey);
         builder.UseSetting("Audit:HashKey", HashKey);
         builder.UseSetting("ConnectionStrings:App", "Host=localhost;Database=x;Username=app_user"); // never connected to
-        builder.UseSetting("ConnectionStrings:Identity", "Host=localhost;Database=x;Username=owner"); // never connected to
-        builder.UseSetting("Auth:DevTokenIssuer:Enabled", DevIssuer ? "true" : "false");
+        builder.UseSetting("ConnectionStrings:Identity", "Host=localhost;Database=x;Username=identity_reader"); // never connected to
+        if (!OmitDevIssuerSetting) builder.UseSetting("Auth:DevTokenIssuer:Enabled", DevIssuer ? "true" : "false");
+        if (DevTokenPermitLimit is { } limit) builder.UseSetting("Auth:DevTokenIssuer:PermitLimit", limit.ToString());
 
         builder.ConfigureTestServices(services =>
         {
@@ -246,11 +249,81 @@ public class ApiTests
     }
 
     [Fact]
+    public async Task Dev_token_unknown_tenant_and_unknown_user_are_indistinguishable()
+    {
+        using var factory = new ApiFactory();
+        var client = factory.CreateClient();
+
+        var unknownTenant = await client.PostAsJsonAsync("/auth/dev-token", new { tenant = "nope", email = "hr@acme.test" });
+        var unknownUser = await client.PostAsJsonAsync("/auth/dev-token", new { tenant = "acme", email = "nobody@acme.test" });
+        var bothUnknown = await client.PostAsJsonAsync("/auth/dev-token", new { tenant = "nope", email = "nobody@acme.test" });
+
+        Assert.Equal(HttpStatusCode.Unauthorized, unknownTenant.StatusCode);
+        var expectedBody = await unknownTenant.Content.ReadAsStringAsync();
+        foreach (var res in new[] { unknownUser, bothUnknown })
+        {
+            Assert.Equal(unknownTenant.StatusCode, res.StatusCode);
+            Assert.Equal(expectedBody, await res.Content.ReadAsStringAsync());
+            Assert.Equal(unknownTenant.Content.Headers.ContentType, res.Content.Headers.ContentType);
+            Assert.Equal(
+                unknownTenant.Headers.Select(h => h.Key).OrderBy(k => k),
+                res.Headers.Select(h => h.Key).OrderBy(k => k));
+        }
+    }
+
+    [Fact]
+    public async Task Dev_token_is_rate_limited_per_client_with_429_past_the_limit()
+    {
+        using var factory = new ApiFactory { DevTokenPermitLimit = 3 };
+        var client = factory.CreateClient();
+        var body = new { tenant = "nope", email = "x@y.z" };
+
+        for (var i = 0; i < 3; i++)
+            Assert.Equal(HttpStatusCode.Unauthorized, (await client.PostAsJsonAsync("/auth/dev-token", body)).StatusCode);
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await client.PostAsJsonAsync("/auth/dev-token", body)).StatusCode);
+        // Even a valid pair is throttled once the window is spent: the limit is on the caller, not the outcome.
+        Assert.Equal(HttpStatusCode.TooManyRequests,
+            (await client.PostAsJsonAsync("/auth/dev-token", new { tenant = "acme", email = "hr@acme.test" })).StatusCode);
+    }
+
+    [Fact]
+    public async Task Dev_token_rate_limit_does_not_throttle_other_endpoints()
+    {
+        using var factory = new ApiFactory { DevTokenPermitLimit = 1 };
+        var client = factory.CreateClient();
+        await client.PostAsJsonAsync("/auth/dev-token", new { tenant = "nope", email = "x@y.z" });
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await client.PostAsJsonAsync("/auth/dev-token", new { tenant = "nope", email = "x@y.z" })).StatusCode);
+
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/health")).StatusCode);
+    }
+
+    [Fact]
     public async Task Dev_token_endpoint_does_not_exist_when_disabled()
     {
         using var factory = new ApiFactory { DevIssuer = false, Environment = "Production" };
         var res = await factory.CreateClient().PostAsJsonAsync("/auth/dev-token", new { tenant = "acme", email = "hr@acme.test" });
         Assert.Equal(HttpStatusCode.NotFound, res.StatusCode);
+    }
+
+    [Fact]
+    public async Task Dev_token_endpoint_does_not_exist_when_the_setting_is_absent()
+    {
+        // No Auth:DevTokenIssuer setting at all (Production reads only appsettings.json): the default is off.
+        using var factory = new ApiFactory { Environment = "Production", OmitDevIssuerSetting = true };
+        var res = await factory.CreateClient().PostAsJsonAsync("/auth/dev-token", new { tenant = "acme", email = "hr@acme.test" });
+        Assert.Equal(HttpStatusCode.NotFound, res.StatusCode);
+    }
+
+    [Fact]
+    public void Host_refuses_to_start_with_the_dev_token_issuer_outside_development()
+    {
+        using var factory = new ApiFactory { Environment = "Production", DevIssuer = true };
+
+        var ex = Record.Exception(() => factory.CreateClient());
+
+        Assert.NotNull(ex);
+        Assert.Contains("not Development", ex!.ToString());
     }
 
     [Fact]
