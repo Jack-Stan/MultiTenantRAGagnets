@@ -55,6 +55,35 @@ jobs:
           export APP_URL="postgres://app_user:${APP_USER_PASSWORD}@localhost:5432/mtra"
           bash db/tests/run.sh
 
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      # Steps 8 and 9: the 200-query leakage suite, RLS-only run, dropped-policy negative control,
+      # returned == k, recall/MRR and p95. Needs the real database above. CI=true makes missing
+      # OWNER_URL/APP_URL a FAILURE, never a skip. Keyless: fake LLM and fake embeddings, no secrets.
+      - name: Run leakage suite (integration, real Postgres)
+        env:
+          CI: "true"
+          RESULTS_DIR: ${{ github.workspace }}/results
+        run: |
+          export OWNER_URL="postgres://postgres:ci-throwaway-owner@localhost:5432/mtra"
+          export APP_URL="postgres://app_user:${APP_USER_PASSWORD}@localhost:5432/mtra"
+          dotnet test tests/MultiTenantRAGagnets.Leakage -c Release --nologo
+
+      - name: Show leakage results in the job summary
+        if: always()
+        run: |
+          if [ -f results/leakage-results.md ]; then cat results/leakage-results.md >> "$GITHUB_STEP_SUMMARY"; else echo "No leakage results file was produced." >> "$GITHUB_STEP_SUMMARY"; fi
+
+      - name: Upload leakage results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: leakage-results
+          path: results/leakage-results.*
+          if-no-files-found: error
+
   dotnet:
     name: build + unit tests
     runs-on: ubuntu-latest
@@ -64,4 +93,6 @@ jobs:
         with:
           dotnet-version: 9.0.x
       - run: dotnet build --nologo -c Release
-      - run: dotnet test --nologo -c Release --no-build
+      # The Leakage project needs the real database and runs in the `db` job (it fails, not skips, when CI=true and
+      # OWNER_URL/APP_URL are missing), so it is excluded here.
+      - run: dotnet test --nologo -c Release --no-build --filter "FullyQualifiedName!~MultiTenantRAGagnets.Leakage"
