@@ -21,7 +21,9 @@ BEGIN
     PERFORM pg_temp.expect(
         NOT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
                     WHERE n.nspname = 'public' AND c.relowner = r.oid)
-        AND NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.proowner = r.oid),
+        -- Scoped to public: _helpers.sql creates pg_temp.expect/denied as this role.
+        AND NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace pn ON pn.oid = p.pronamespace
+                        WHERE pn.nspname = 'public' AND p.proowner = r.oid),
         'identity_reader must own nothing');
 END
 $$;
