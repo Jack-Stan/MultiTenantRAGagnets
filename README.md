@@ -4,7 +4,8 @@
 
 ### Permission-aware, multi-tenant RAG where the **database** keeps the secrets, not the prompt.
 
-![Status](https://img.shields.io/badge/status-design%20stage-orange?style=for-the-badge)
+[![CI](https://img.shields.io/github/actions/workflow/status/Jack-Stan/MultiTenantRAGagnets/ci.yml?branch=main&style=for-the-badge&label=CI)](https://github.com/Jack-Stan/MultiTenantRAGagnets/actions/workflows/ci.yml)
+![Status](https://img.shields.io/badge/status-MVP%20built-brightgreen?style=for-the-badge)
 ![.NET](https://img.shields.io/badge/ASP.NET%20Core-512BD4?style=for-the-badge&logo=dotnet&logoColor=white)
 ![Postgres](https://img.shields.io/badge/Postgres%2016-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)
 ![pgvector](https://img.shields.io/badge/pgvector-HNSW-336791?style=for-the-badge)
@@ -16,7 +17,7 @@
 </div>
 
 > [!NOTE]
-> **Status: design stage.** This repo holds the planning and context docs only. There is no code yet, and no measured results yet. Every number promised below is something the build must produce, not something already achieved.
+> **Status: MVP built, with measured results.** The service, schema, RLS policies and the leakage harness are in this repo, and CI runs the whole harness against a real `pgvector/pgvector:pg16` container on every push. Numbers below come from [`results/`](./results/) and are stated with their caveats. Not yet done: a run with real Ollama embeddings (so retrieval *quality* is unmeasured), and a hosted deployment.
 
 ---
 
@@ -110,16 +111,26 @@ Each query writes an append-only audit row. Full flow in [`docs/APP_FLOW.md`](./
 
 ## 🧪 Proof, not promises
 
-The build is designed around an eval harness that is built **early, not last**. The plan is to measure and publish:
+The harness was built early, not last, and runs keyless in CI (fake LLM, no secrets). Latest committed run: [`results/leakage-results.md`](./results/leakage-results.md), Postgres 16.15 + pgvector 0.8, 4-core GitHub runner.
 
-- 🚫 **Leakage suite.** 200 adversarial queries across tenants and roles, expecting zero leaked chunks, with a **negative control** (filters off) to prove the test can actually fail, and an **RLS-only run** to prove the database lock stands alone.
-- 🎯 **Retrieval quality.** recall@k and MRR over a labelled question set.
-- ⏱️ **p95 latency.** Retrieval and end-to-end, with corpus size and hardware stated.
-- 🔑 **Keyless CI.** The entire harness runs on GitHub Actions with the fake LLM and no secrets.
+| Check | Result |
+|:--|:--|
+| 🚫 **Leakage, full service** (app filter + RLS) | **0 leaks** over 200 adversarial queries, natural and aimed straight at forbidden chunks |
+| 🚫 **Leakage, RLS only** (app filter removed) | **0 leaks**, same 200 queries, both variants |
+| 🧪 **Negative control, RLS disabled** | **1,879 leaks** detected (725 cross-tenant, 132 cross-role), so the harness can fail |
+| 🧪 **Negative control, tenant-only policy** | **880 leaks**, all cross-role, none cross-tenant: the role clause does real work |
+| 🎯 **`returned == k`** with 2,500 hostile neighbour rows | exactly `min(k, available)` at k = 1, 5, 10, 20; with iterative scan off it returns 0 |
+| ⏱️ **p95 retrieval / end-to-end** (planner default) | 1.9 ms / 2.8 ms on 2,671 rows, fake LLM (about 0 ms), shared CI runner |
+
+**Read these honestly:**
+
+- Embeddings in CI are a deterministic hash, with no semantics. **recall@5 = 0.345 and MRR = 0.196 are harness smoke values, not a retrieval-quality result.** Quality needs a run with real Ollama embeddings.
+- Latency is for about 2.7k rows on a shared runner with a fake LLM. It is not a production claim and says nothing about real LLM latency.
+- Zero leaks proves the filter and database layers hold under these 200 queries. It does not cover prompt-injection distortion, which is out of scope below.
 
 ## 🗺️ Roadmap
 
-A 15-step build, roughly three weeks of evenings, with a defined MVP cut line. See [`docs/IMPLEMENTATION_PLAN.md`](./docs/IMPLEMENTATION_PLAN.md).
+A 15-step build with a defined MVP cut line, in [`docs/IMPLEMENTATION_PLAN.md`](./docs/IMPLEMENTATION_PLAN.md). Steps 1 to 11 are done and proven in CI. Steps 12 (access-change test) and 13 (audit integrity test) are in progress. Next: a real-embeddings quality run.
 
 ## 🚧 Honest threat model
 
