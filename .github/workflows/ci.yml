@@ -34,11 +34,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Generate a throwaway app_user password
+      - name: Generate throwaway app_user and identity_reader passwords
         run: |
           pw="$(openssl rand -hex 16)"
           echo "::add-mask::$pw"
           echo "APP_USER_PASSWORD=$pw" >> "$GITHUB_ENV"
+          ipw="$(openssl rand -hex 16)"
+          echo "::add-mask::$ipw"
+          echo "IDENTITY_USER_PASSWORD=$ipw" >> "$GITHUB_ENV"
 
       - name: Apply migrations in filename order
         run: |
@@ -48,11 +51,14 @@ jobs:
           done
           echo "== db/migrations/003_app_user_password.sh"
           bash db/migrations/003_app_user_password.sh
+          echo "== db/migrations/004_identity_user_password.sh"
+          bash db/migrations/004_identity_user_password.sh
 
       - name: Run RLS smoke tests
         run: |
           export OWNER_URL="postgres://postgres:ci-throwaway-owner@localhost:5432/mtra"
           export APP_URL="postgres://app_user:${APP_USER_PASSWORD}@localhost:5432/mtra"
+          export IDENTITY_URL="postgres://identity_reader:${IDENTITY_USER_PASSWORD}@localhost:5432/mtra"
           bash db/tests/run.sh
 
       - uses: actions/setup-dotnet@v4

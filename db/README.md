@@ -14,7 +14,9 @@ Implements IMPLEMENTATION_PLAN steps 2 and 3 (see `docs/TRD.md` section 7).
 | `migrations/001_schema.sql` | owner/superuser | extension, `roles` + hierarchy functions, `tenants`, `users`, `documents`, `chunks` (+ HNSW), `audit_log` |
 | `migrations/002_rls.sql` | owner/superuser | `app_user` role, RLS enable+force, one policy per table, grants (audit append-only) |
 | `migrations/003_app_user_password.sh` | owner/superuser | sets `app_user`'s password from `APP_USER_PASSWORD` (no secret in git) |
-| `down/002_rls.down.sql`, `down/001_schema.down.sql` | owner/superuser | reverse, in that order. Destructive: dev only |
+| `migrations/004_identity_role.sql` | owner/superuser | `identity_reader` login role, `rag_identity_definer` (NOLOGIN) and the `rag_resolve_user(slug, email)` SECURITY DEFINER lookup |
+| `migrations/004_identity_user_password.sh` | owner/superuser | sets `identity_reader`'s password from `IDENTITY_USER_PASSWORD`. Sorts after `004_identity_role.sql` ('r' < 'u'); keep it that way |
+| `down/004_identity_role.down.sql`, `down/002_rls.down.sql`, `down/001_schema.down.sql` | owner/superuser | reverse, in that order. Destructive: dev only |
 | `tests/` | see below | smoke checks |
 
 ### How they are applied
@@ -31,6 +33,51 @@ PADRAIG). The API's request-path connection string uses `app_user`; **never** th
 owner.
 
 `down/` sits outside `migrations/` on purpose so the entrypoint never runs it.
+
+## Login lookup (before any tenant context exists)
+
+`/auth/dev-token` (and any future login) must turn `(tenant slug, email)` into
+`(user id, tenant id, role)` before there is a tenant to set, but `tenants`/`users`
+are RLS-scoped. Do **not** use the owner for this. Use `identity_reader`:
+
+- LOGIN, NOSUPERUSER, NOBYPASSRLS, NOINHERIT, owns nothing, member of nothing,
+  **no table privileges at all**. Its only privilege is EXECUTE on one function.
+- `public.rag_resolve_user(p_slug text, p_email text) RETURNS TABLE (user_id uuid,
+  tenant_id uuid, role text)`: SECURITY DEFINER, owned by `rag_identity_definer`
+  (NOLOGIN, BYPASSRLS, column-level SELECT on `tenants(id, slug)` and
+  `users(id, tenant_id, email, role)` only; deliberately not the superuser owner),
+  `search_path` pinned to `pg_catalog, pg_temp`, everything schema-qualified, STRICT.
+- **Exact match only** (no case folding, trimming, LIKE or prefix). Normalise the
+  email in the API *before* calling if you want case-insensitivity, and normalise the
+  same way on whatever writes `users.email`.
+- **Zero or one row.** Unknown tenant and unknown user both give zero rows, so the
+  database cannot be used to tell them apart. The API must return the *same* 401 for
+  both, and rate-limit the endpoint (the database does not).
+- EXECUTE is revoked from PUBLIC and from `app_user`. `app_user` is the tenant-scoped,
+  post-authentication role; if it could resolve arbitrary (slug, email) a compromised
+  request path could probe every tenant's membership, which is what RLS prevents.
+
+Call it (Npgsql, parameters typed `text`, no transaction or `set_config` needed):
+
+```sql
+SELECT user_id, tenant_id, role FROM public.rag_resolve_user(@slug, @email);
+```
+
+Connection string shape (separate from the `app_user` one; password from env/secret
+store, never committed):
+
+```
+Host=<host>;Port=5432;Database=<db>;Username=identity_reader;Password=<IDENTITY_USER_PASSWORD>
+```
+
+Then mint the JWT from the returned `tenant_id` + `role`; every later request uses the
+`app_user` connection with `set_config('app.tenant_id', ...)` as above. The container
+needs `IDENTITY_USER_PASSWORD` in its environment (compose, owned by PADRAIG).
+
+Known residuals: PUBLIC can still EXECUTE the pure helper functions from 001/002
+(`rag_level_allows`, `rag_current_*`; `rag_role_level` is refused because it reads
+`roles`) and create TEMP tables, both harmless. The migration runner must be a
+superuser (creating a BYPASSRLS role needs it), same as the owner assumption below.
 
 ## Access model in the database
 
@@ -90,8 +137,15 @@ APP_URL=postgres://app_user:<pw>@localhost:5432/<db> \
   bash db/tests/run.sh
 ```
 
+Optional `IDENTITY_URL=postgres://identity_reader:<pw>@localhost:5432/<db>` also runs
+`10_identity_reader.sql` as `identity_reader` (no direct SELECT on any table, cannot
+call/become anything else, function is built as claimed, resolves seeded users, zero
+rows for every wrong/odd input, temp-table shadowing can't redirect it). If unset it is
+skipped with a loud `!! SKIPPED` line. `08_*` (as `app_user`) proves `app_user` cannot
+execute the lookup, and always runs.
+
 `00_fixture.sql` runs as owner (idempotent seed: 2 tenants, 5 docs, 6 chunks, one-hot
-embeddings with the other tenant sitting on the query point). `01`-`07` run as
+embeddings with the other tenant sitting on the query point). `01`-`09` run as
 `app_user`, each in a transaction that rolls back, asserting with `RAISE EXCEPTION`
 (psql `ON_ERROR_STOP` makes the runner exit non-zero). `01` fails if the connection is
 not a locked-down role, because otherwise every "0 rows" result is hollow.
