@@ -1,6 +1,6 @@
 # Leakage results
 
-Generated 2026-10-08 20:37:56Z, git `e34e31aebb13a70c082e89bb4542df01d9b28d8d`, CI=True.
+Generated 2026-10-08 20:59:18Z, git `b3b917c531bfd3cb38e6395ec8f952373795450d`, CI=True.
 Machine-readable copy: `leakage-results.json`. Produced by `tests/MultiTenantRAGagnets.Leakage`.
 
 ## Setup (stated with every number)
@@ -9,7 +9,7 @@ Machine-readable copy: `leakage-results.json`. Produced by `tests/MultiTenantRAG
 - Adversarial queries: 200. Labelled questions: 84.
 - Chunking: fixed-window-chars, whitespace-snap, no trimming; size=500 chars; overlap=100 chars; wordSnapWindow=80 chars.
 - Embedding provider kind: **Fake** (`fake-embedding`, 768 dims). Ollama was not used.
-- Hardware: Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz, 4 logical cores, 15.6 GiB RAM, Ubuntu 24.04.5 LTS, .NET 9.0.20.
+- Hardware: AMD EPYC 9V74 80-Core Processor, 4 logical cores, 15.6 GiB RAM, Ubuntu 24.04.5 LTS, .NET 9.0.20.
 - Database: PostgreSQL 16.15 (Debian 16.15-1.pgdg12+2) on x86_64-pc-linux-gnu, compiled by gcc (Debian 12.2.0-14+deb12u1) 12.2.0, 64-bit, pgvector 0.8.7; on the same machine as the test runner (CI service container or local).
 
 ## Leakage (security result)
@@ -27,9 +27,9 @@ Leaks = forbidden chunk ids retrieved + forbidden chunk ids that reached the cha
 
 | What was broken | Variant | Leaks | Cross-tenant | Cross-role | Detected |
 |---|---|---|---|---|---|
-| RLS disabled on chunks (no policy protection at all) | RLS disabled, RLS-only run, bait on query point | **1879** | 725 | 132 | yes |
-| RLS disabled on chunks (no policy protection at all) | NEGATIVE CONTROL natural | **1777** | 794 | 58 | yes |
-| chunks policy reduced to tenant-only (role/level clause removed) | tenant-only policy, RLS-only run, bait on query point | **880** | 0 | 377 | yes |
+| RLS disabled on chunks (no policy protection at all) | RLS disabled, RLS-only run, bait on query point | **1868** | 735 | 126 | yes |
+| RLS disabled on chunks (no policy protection at all) | NEGATIVE CONTROL natural | **1750** | 770 | 68 | yes |
+| chunks READ policy (chunks_select) reduced to tenant-only (role/level clause removed) | tenant-only policy, RLS-only run, bait on query point | **880** | 0 | 377 | yes |
 
 ## `returned == k` under a hostile neighbour distribution
 
@@ -86,8 +86,8 @@ Control with `hnsw.iterative_scan = off` at k=5: returned **0** (the under-retur
 |---|---|---|---|---|
 | exact search (index scans off) | 5 | 84 | 0.345 | 0.196 |
 | exact search (index scans off) | 10 | 84 | 0.488 | 0.214 |
-| HNSW forced, iterative scan on | 5 | 84 | 0.345 | 0.196 |
-| HNSW forced, iterative scan on | 10 | 84 | 0.488 | 0.214 |
+| HNSW forced, iterative scan on | 5 | 84 | 0.310 | 0.176 |
+| HNSW forced, iterative scan on | 10 | 84 | 0.476 | 0.197 |
 | planner default, iterative scan on | 5 | 84 | 0.345 | 0.196 |
 | planner default, iterative scan on | 10 | 84 | 0.488 | 0.214 |
 
@@ -97,9 +97,9 @@ Retrieval = open app_user connection + BEGIN + SET LOCAL context + vector search
 
 | Measure | Planner path | k | Samples | p50 ms | p95 ms | p99 ms | mean ms |
 |---|---|---|---|---|---|---|---|
-| retrieval only | planner default | 5 | 252 | 1.610 | **1.863** | 3.179 | 1.664 |
-| end-to-end (fake LLM) | planner default | 5 | 252 | 2.451 | **2.756** | 3.890 | 2.493 |
-| retrieval only | HNSW forced | 5 | 252 | 2.291 | **9.398** | 10.422 | 3.434 |
-| end-to-end (fake LLM) | HNSW forced | 5 | 252 | 3.114 | **10.473** | 11.620 | 4.295 |
+| retrieval only | planner default | 5 | 252 | 1.291 | **1.372** | 1.442 | 1.291 |
+| end-to-end (fake LLM) | planner default | 5 | 252 | 1.885 | **2.017** | 17.730 | 2.198 |
+| retrieval only | HNSW forced | 5 | 252 | 1.457 | **6.206** | 6.889 | 2.442 |
+| end-to-end (fake LLM) | HNSW forced | 5 | 252 | 2.027 | **6.877** | 16.854 | 3.310 |
 
 _Leakage numbers are a security result. recall@k and MRR are HARNESS SMOKE TEST values only when EmbeddingProviderKind is Fake: fake embeddings carry no semantics, so they say nothing about retrieval quality._

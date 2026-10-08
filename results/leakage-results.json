@@ -1,11 +1,11 @@
 {
   "schema": "mtra-leakage-results/1",
-  "generatedAtUtc": "2026-10-08T20:37:56.9130446+00:00",
-  "gitSha": "e34e31aebb13a70c082e89bb4542df01d9b28d8d",
+  "generatedAtUtc": "2026-10-08T20:59:18.8253251+00:00",
+  "gitSha": "b3b917c531bfd3cb38e6395ec8f952373795450d",
   "disclaimer": "Leakage numbers are a security result. recall@k and MRR are HARNESS SMOKE TEST values only when EmbeddingProviderKind is Fake: fake embeddings carry no semantics, so they say nothing about retrieval quality.",
   "environment": {
     "os": "Ubuntu 24.04.5 LTS",
-    "cpu": "Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz",
+    "cpu": "AMD EPYC 9V74 80-Core Processor",
     "logicalCores": 4,
     "totalMemoryGiB": 15.6,
     "runtime": ".NET 9.0.20",
@@ -110,16 +110,16 @@
         "k": 5,
         "queries": 200,
         "returnedChunks": 1000,
-        "leaks": 1879,
-        "leakedRetrievedChunks": 857,
-        "leakedSentToLlmChunks": 857,
-        "secretMarkersInPrompt": 165,
+        "leaks": 1868,
+        "leakedRetrievedChunks": 861,
+        "leakedSentToLlmChunks": 861,
+        "secretMarkersInPrompt": 146,
         "queriesWithLeak": 200,
-        "crossTenantLeakedChunks": 725,
-        "crossRoleLeakedChunks": 132,
+        "crossTenantLeakedChunks": 735,
+        "crossRoleLeakedChunks": 126,
         "errors": 0,
         "queriesWithWrongRowCount": 0,
-        "baitRetrievedQueries": 163
+        "baitRetrievedQueries": 153
       },
       "detectedLeaks": true,
       "expectation": "leaks \u003E 0, both cross-tenant and cross-role"
@@ -133,22 +133,22 @@
         "k": 5,
         "queries": 200,
         "returnedChunks": 1000,
-        "leaks": 1777,
-        "leakedRetrievedChunks": 852,
-        "leakedSentToLlmChunks": 852,
-        "secretMarkersInPrompt": 73,
+        "leaks": 1750,
+        "leakedRetrievedChunks": 838,
+        "leakedSentToLlmChunks": 838,
+        "secretMarkersInPrompt": 74,
         "queriesWithLeak": 200,
-        "crossTenantLeakedChunks": 794,
-        "crossRoleLeakedChunks": 58,
+        "crossTenantLeakedChunks": 770,
+        "crossRoleLeakedChunks": 68,
         "errors": 0,
         "queriesWithWrongRowCount": 0,
-        "baitRetrievedQueries": 8
+        "baitRetrievedQueries": 7
       },
       "detectedLeaks": true,
       "expectation": "leaks \u003E 0"
     },
     {
-      "broken": "chunks policy reduced to tenant-only (role/level clause removed)",
+      "broken": "chunks READ policy (chunks_select) reduced to tenant-only (role/level clause removed)",
       "run": {
         "label": "tenant-only policy, RLS-only run, bait on query point",
         "mode": "RlsOnly",
@@ -454,15 +454,15 @@
       "searchPath": "HNSW forced, iterative scan on",
       "k": 5,
       "questions": 84,
-      "recallAtK": 0.34523809523809523,
-      "mrr": 0.1962301587301587
+      "recallAtK": 0.30952380952380953,
+      "mrr": 0.17599206349206348
     },
     {
       "searchPath": "HNSW forced, iterative scan on",
       "k": 10,
       "questions": 84,
-      "recallAtK": 0.4880952380952381,
-      "mrr": 0.21441326530612245
+      "recallAtK": 0.47619047619047616,
+      "mrr": 0.19682067271352982
     },
     {
       "searchPath": "planner default, iterative scan on",
@@ -486,40 +486,40 @@
       "plannerPath": "planner default",
       "samples": 252,
       "k": 5,
-      "p50Ms": 1.6104,
-      "p95Ms": 1.8632,
-      "p99Ms": 3.1787,
-      "meanMs": 1.663555555555557
+      "p50Ms": 1.2911,
+      "p95Ms": 1.3722,
+      "p99Ms": 1.4419,
+      "meanMs": 1.2907920634920633
     },
     {
       "measure": "end-to-end (fake LLM)",
       "plannerPath": "planner default",
       "samples": 252,
       "k": 5,
-      "p50Ms": 2.4511,
-      "p95Ms": 2.7556,
-      "p99Ms": 3.8897,
-      "meanMs": 2.492602777777778
+      "p50Ms": 1.8853,
+      "p95Ms": 2.0166,
+      "p99Ms": 17.7303,
+      "meanMs": 2.1981333333333337
     },
     {
       "measure": "retrieval only",
       "plannerPath": "HNSW forced",
       "samples": 252,
       "k": 5,
-      "p50Ms": 2.2908,
-      "p95Ms": 9.3977,
-      "p99Ms": 10.4219,
-      "meanMs": 3.433775793650794
+      "p50Ms": 1.4565,
+      "p95Ms": 6.2056,
+      "p99Ms": 6.8886,
+      "meanMs": 2.441819047619048
     },
     {
       "measure": "end-to-end (fake LLM)",
       "plannerPath": "HNSW forced",
       "samples": 252,
       "k": 5,
-      "p50Ms": 3.1136,
-      "p95Ms": 10.4725,
-      "p99Ms": 11.6201,
-      "meanMs": 4.29479007936508
+      "p50Ms": 2.0265,
+      "p95Ms": 6.8768,
+      "p99Ms": 16.8541,
+      "meanMs": 3.3097007936507916
     }
   ],
   "missingSections": []

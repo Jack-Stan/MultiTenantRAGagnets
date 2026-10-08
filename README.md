@@ -117,14 +117,14 @@ The harness was built early, not last, and runs keyless in CI (fake LLM, no secr
 |:--|:--|
 | 🚫 **Leakage, full service** (app filter + RLS) | **0 leaks** over 200 adversarial queries, natural and aimed straight at forbidden chunks |
 | 🚫 **Leakage, RLS only** (app filter removed) | **0 leaks**, same 200 queries, both variants |
-| 🧪 **Negative control, RLS disabled** | **1,879 leaks** detected (725 cross-tenant, 132 cross-role), so the harness can fail |
+| 🧪 **Negative control, RLS disabled** | **1,868 leaks** detected (735 cross-tenant, 126 cross-role), so the harness can fail |
 | 🧪 **Negative control, tenant-only policy** | **880 leaks**, all cross-role, none cross-tenant: the role clause does real work |
 | 🎯 **`returned == k`** with 2,500 hostile neighbour rows | exactly `min(k, available)` at k = 1, 5, 10, 20; with iterative scan off it returns 0 |
-| ⏱️ **p95 retrieval / end-to-end** (planner default) | 1.9 ms / 2.8 ms on 2,671 rows, fake LLM (about 0 ms), shared CI runner |
+| ⏱️ **p95 retrieval / end-to-end** (planner default) | 1.4 ms / 2.0 ms on 2,671 rows, fake LLM (about 0 ms), shared CI runner. Forced HNSW path: 6.2 ms / 6.9 ms |
 
 **Read these honestly:**
 
-- Embeddings in CI are a deterministic hash, with no semantics. **recall@5 = 0.345 and MRR = 0.196 are harness smoke values, not a retrieval-quality result.** Quality needs a run with real Ollama embeddings.
+- Embeddings in CI are a deterministic hash, with no semantics. **recall@5 = 0.345 and MRR = 0.196 (exact search; 0.310 and 0.176 on the forced HNSW path) are harness smoke values, not a retrieval-quality result.** Quality needs a run with real Ollama embeddings.
 - Latency is for about 2.7k rows on a shared runner with a fake LLM. It is not a production claim and says nothing about real LLM latency.
 - Zero leaks proves the filter and database layers hold under these 200 queries. It does not cover prompt-injection distortion, which is out of scope below.
 
