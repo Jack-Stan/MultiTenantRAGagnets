@@ -41,8 +41,8 @@ public class NegativeControlTests(LeakageFixture fx)
     private async Task<RlsSnapshot> PristineAsync()
     {
         var snap = await RlsSnapshot.CaptureAsync(fx.OwnerDs);
-        Assert.True(snap.Enabled && snap.Forced && snap.Policies.Count == 1,
-            "RLS on chunks is not in its migrated state before the control starts: " + snap.Describe());
+        Assert.True(snap.Enabled && snap.Forced, "RLS on chunks is not enabled+forced before the control starts: " + snap.Describe());
+        RlsExpectations.AssertChunkPolicySet(snap);
         return snap;
     }
 
@@ -93,11 +93,11 @@ public class NegativeControlTests(LeakageFixture fx)
     {
         var original = await PristineAsync();
         var (natural, bait) = await RunBrokenAsync(
-            () => RlsControl.ReplaceWithTenantOnlyPolicyAsync(fx.OwnerDs, original), original);
+            () => RlsControl.ReplaceReadPolicyWithTenantOnlyAsync(fx.OwnerDs, original), original);
 
         fx.Results.NegativeControls.Add(new NegativeControlSummary
         {
-            Broken = "chunks policy reduced to tenant-only (role/level clause removed)",
+            Broken = "chunks READ policy (chunks_select) reduced to tenant-only (role/level clause removed)",
             Run = RunSummary.From(bait),
             Expectation = "cross-role leaks > 0, cross-tenant leaks == 0",
             DetectedLeaks = bait.CrossRoleLeakedChunks > 0,

@@ -26,9 +26,7 @@ public class PreconditionTests(LeakageFixture fx)
 
         var snap = await RlsSnapshot.CaptureAsync(fx.OwnerDs);
         Assert.True(snap.Enabled && snap.Forced, "RLS must be ENABLED and FORCED on chunks. " + snap.Describe());
-        var policy = Assert.Single(snap.Policies);
-        Assert.Contains("rag_current_tenant", policy.Using);
-        Assert.Contains("rag_level_allows", policy.Using);
+        RlsExpectations.AssertChunkPolicySet(snap);
 
         await using var ownerConn = await fx.OwnerDs.OpenConnectionAsync();
         await using var cmd = new NpgsqlCommand("SELECT rolsuper FROM pg_roles WHERE rolname = current_user", ownerConn);

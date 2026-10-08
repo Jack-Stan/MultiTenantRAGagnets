@@ -152,14 +152,18 @@ public static class RlsControl
         await cmd.ExecuteNonQueryAsync();
     }
 
-    /// <summary>Replaces the chunk policy with a tenant-only one (the role/level clause removed).</summary>
-    public static async Task ReplaceWithTenantOnlyPolicyAsync(NpgsqlDataSource owner, RlsSnapshot original)
+    /// <summary>
+    /// Replaces the chunks READ (SELECT) policy with a tenant-only one: the documents EXISTS / level clause is removed.
+    /// The write policies are left alone, so the only thing that changes is who may READ which level.
+    /// </summary>
+    public static async Task ReplaceReadPolicyWithTenantOnlyAsync(NpgsqlDataSource owner, RlsSnapshot original)
     {
-        var name = Q(original.Policies.Single().Name);
+        var read = original.Policies.Single(p => p.Cmd == "r");
+        var name = Q(read.Name);
         await using var conn = await owner.OpenConnectionAsync();
         await using var cmd = new NpgsqlCommand(
             $"DROP POLICY {name} ON chunks; " +
-            $"CREATE POLICY {name} ON chunks FOR ALL USING (tenant_id = rag_current_tenant()) WITH CHECK (tenant_id = rag_current_tenant());", conn);
+            $"CREATE POLICY {name} ON chunks FOR SELECT USING (tenant_id = rag_current_tenant());", conn);
         await cmd.ExecuteNonQueryAsync();
     }
 
@@ -199,5 +203,36 @@ public static class RlsControl
                 "RLS ON chunks WAS NOT RESTORED EXACTLY. The database is now in a modified state; re-run the migrations before trusting anything.\n" +
                 $"before: {original.Describe()}\nafter:  {after.Describe()}");
         }
+    }
+}
+
+/// <summary>The migrated policy set on chunks after 005_write_policies.sql: four per-command permissive policies, nothing else.</summary>
+public static class RlsExpectations
+{
+    public static readonly (string Name, string Cmd)[] ChunkPolicies =
+        [("chunks_delete", "d"), ("chunks_insert", "a"), ("chunks_select", "r"), ("chunks_update", "w")];
+
+    public static void AssertChunkPolicySet(RlsSnapshot snap)
+    {
+        var actual = snap.Policies.Select(p => (p.Name, p.Cmd)).OrderBy(x => x.Name, StringComparer.Ordinal).ToArray();
+        Assert.True(actual.SequenceEqual(ChunkPolicies),
+            $"chunks must carry exactly the four per-command policies {string.Join(", ", ChunkPolicies.Select(c => c.Name + "/" + c.Cmd))}. " + snap.Describe());
+        Assert.All(snap.Policies, p => Assert.True(p.Permissive && p.ForPublic, $"policy {p.Name} must be permissive and for PUBLIC: " + snap.Describe()));
+
+        var select = snap.Policies.Single(p => p.Cmd == "r");
+        Assert.Contains("rag_current_tenant", select.Using);
+        Assert.Contains("rag_level_allows", select.Using);
+        Assert.Contains("documents", select.Using);   // the EXISTS on the parent document: the ACL is read, never copied
+        Assert.Null(select.WithCheck);
+
+        Assert.All(snap.Policies.Where(p => p.Cmd != "r"), p =>
+        {
+            var text = (p.Using ?? "") + " " + (p.WithCheck ?? "");
+            Assert.True(text.Contains("rag_can_write", StringComparison.Ordinal), $"write policy {p.Name} does not carry rag_can_write(): " + snap.Describe());
+            Assert.True(text.Contains("rag_current_tenant", StringComparison.Ordinal), $"write policy {p.Name} lost the tenant wall: " + snap.Describe());
+        });
+        Assert.NotNull(snap.Policies.Single(p => p.Cmd == "a").WithCheck);
+        Assert.NotNull(snap.Policies.Single(p => p.Cmd == "w").WithCheck);
+        Assert.NotNull(snap.Policies.Single(p => p.Cmd == "d").Using);
     }
 }
