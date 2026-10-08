@@ -130,7 +130,7 @@ The harness was built early, not last, and runs keyless in CI (fake LLM, no secr
 
 ## 🗺️ Roadmap
 
-A 15-step build with a defined MVP cut line, in [`docs/IMPLEMENTATION_PLAN.md`](./docs/IMPLEMENTATION_PLAN.md). Steps 1 to 11 are done and proven in CI. Steps 12 (access-change test) and 13 (audit integrity test) are in progress. Next: a real-embeddings quality run.
+A 15-step build with a defined MVP cut line, in [`docs/IMPLEMENTATION_PLAN.md`](./docs/IMPLEMENTATION_PLAN.md). Steps 1 to 13 are done and proven in CI, including the access-change test (a revoke shows on the next query with no re-embed) and the audit-integrity test. Next: a real-embeddings quality run.
 
 ## 🚧 Honest threat model
 
