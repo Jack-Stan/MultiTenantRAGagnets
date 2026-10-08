@@ -1,0 +1,67 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Keyless: the Postgres password is generated per run, nothing comes from repo secrets,
+# and the fake LLM/embedding providers are the default.
+jobs:
+  db:
+    name: database migrations + RLS smoke tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-throwaway-owner
+          POSTGRES_DB: mtra
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d mtra"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      POSTGRES_USER: postgres
+      POSTGRES_DB: mtra
+      PGPASSWORD: ci-throwaway-owner
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate a throwaway app_user password
+        run: |
+          pw="$(openssl rand -hex 16)"
+          echo "::add-mask::$pw"
+          echo "APP_USER_PASSWORD=$pw" >> "$GITHUB_ENV"
+
+      - name: Apply migrations in filename order
+        run: |
+          for f in db/migrations/*.sql; do
+            echo "== $f"
+            psql -v ON_ERROR_STOP=1 -q -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f "$f"
+          done
+          echo "== db/migrations/003_app_user_password.sh"
+          bash db/migrations/003_app_user_password.sh
+
+      - name: Run RLS smoke tests
+        run: |
+          export OWNER_URL="postgres://postgres:ci-throwaway-owner@localhost:5432/mtra"
+          export APP_URL="postgres://app_user:${APP_USER_PASSWORD}@localhost:5432/mtra"
+          bash db/tests/run.sh
+
+  dotnet:
+    name: build + unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+      - run: dotnet build --nologo -c Release
+      - run: dotnet test --nologo -c Release --no-build
