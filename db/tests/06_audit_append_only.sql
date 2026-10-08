@@ -45,6 +45,39 @@ BEGIN
         NULL;  -- expected
     END;
 
+    -- Raw query text is NEVER stored (005_write_policies.sql: CHECK query_text IS NULL).
+    -- Any non-NULL value is rejected, even an empty string, and the hash-only insert
+    -- above (which omits the column) still works.
+    BEGIN
+        INSERT INTO audit_log (tenant_id, user_id, role, query_hash, query_text, model, latency_ms)
+        VALUES ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'a0000000-0000-0000-0000-000000000001', 'employee',
+                'sha256:withtext', 'what is the CEO salary?', 'fake', 1);
+        RAISE EXCEPTION 'SMOKE TEST FAILED: audit_log accepted a non-NULL query_text';
+    EXCEPTION WHEN check_violation THEN
+        NULL;  -- expected (23514, audit_log_query_text_never_stored)
+    END;
+    BEGIN
+        INSERT INTO audit_log (tenant_id, user_id, role, query_hash, query_text, model, latency_ms)
+        VALUES ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'a0000000-0000-0000-0000-000000000001', 'employee',
+                'sha256:emptytext', '', 'fake', 1);
+        RAISE EXCEPTION 'SMOKE TEST FAILED: audit_log accepted an empty-string query_text';
+    EXCEPTION WHEN check_violation THEN
+        NULL;  -- expected
+    END;
+    -- An explicit NULL is fine (it is the only legal value).
+    INSERT INTO audit_log (tenant_id, user_id, role, query_hash, query_text, model, latency_ms)
+    VALUES ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'a0000000-0000-0000-0000-000000000001', 'employee',
+            'sha256:nulltext', NULL, 'fake', 1);
+    PERFORM pg_temp.expect(
+        (SELECT count(*) FROM audit_log WHERE query_text IS NOT NULL) = 0,
+        'no audit row anywhere carries query_text');
+    PERFORM pg_temp.expect(
+        EXISTS (SELECT 1 FROM pg_constraint
+                 WHERE conrelid = 'public.audit_log'::regclass
+                   AND conname = 'audit_log_query_text_never_stored'
+                   AND contype = 'c' AND convalidated),
+        'the query_text CHECK exists and is validated');
+
     -- Tenant B cannot read A's audit rows.
     PERFORM pg_temp.as_caller(pg_temp.tenant_b(), 'hr-admin');
     PERFORM pg_temp.expect((SELECT count(*) FROM audit_log WHERE tenant_id = pg_temp.tenant_a()) = 0,

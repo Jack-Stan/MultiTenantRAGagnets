@@ -12,11 +12,12 @@ Implements IMPLEMENTATION_PLAN steps 2 and 3 (see `docs/TRD.md` section 7).
 | File | Runs as | What |
 |------|---------|------|
 | `migrations/001_schema.sql` | owner/superuser | extension, `roles` + hierarchy functions, `tenants`, `users`, `documents`, `chunks` (+ HNSW), `audit_log` |
-| `migrations/002_rls.sql` | owner/superuser | `app_user` role, RLS enable+force, one policy per table, grants (audit append-only) |
+| `migrations/002_rls.sql` | owner/superuser | `app_user` role, RLS enable+force, one `FOR ALL` policy per table (documents/chunks are split by 005), grants (audit append-only) |
 | `migrations/003_app_user_password.sh` | owner/superuser | sets `app_user`'s password from `APP_USER_PASSWORD` (no secret in git) |
 | `migrations/004_identity_role.sql` | owner/superuser | `identity_reader` login role, `rag_identity_definer` (NOLOGIN) and the `rag_resolve_user(slug, email)` SECURITY DEFINER lookup |
 | `migrations/004_identity_user_password.sh` | owner/superuser | sets `identity_reader`'s password from `IDENTITY_USER_PASSWORD`. Sorts after `004_identity_role.sql` ('r' < 'u'); keep it that way |
-| `down/004_identity_role.down.sql`, `down/002_rls.down.sql`, `down/001_schema.down.sql` | owner/superuser | reverse, in that order. Destructive: dev only |
+| `migrations/005_write_policies.sql` | owner/superuser | replaces the `FOR ALL` policies on `documents`/`chunks` with per-command policies: READ level-based, WRITE needs hr-admin (`rag_can_write()`); `audit_log.query_text` CHECK (always NULL) |
+| `down/005_write_policies.down.sql`, `down/004_identity_role.down.sql`, `down/002_rls.down.sql`, `down/001_schema.down.sql` | owner/superuser | reverse, in that order (005 first). Destructive: dev only |
 | `tests/` | see below | smoke checks |
 
 ### How they are applied
@@ -24,7 +25,7 @@ Implements IMPLEMENTATION_PLAN steps 2 and 3 (see `docs/TRD.md` section 7).
 Mount `db/migrations` at `/docker-entrypoint-initdb.d` on the Postgres container.
 The image runs `*.sql` and `*.sh` there in **alphabetical order, once, only when the
 data directory is empty**, as `POSTGRES_USER` (a superuser) against `POSTGRES_DB`.
-So `001` -> `002` -> `003`. To re-apply after a change: `docker compose down -v`
+So `001` -> `002` -> `003` -> `004` -> `005`. To re-apply after a change: `docker compose down -v`
 (drops the volume) then up. There is no migration runner/versions table yet; if
 migrations outgrow this, move to one without changing the file contents.
 
@@ -87,6 +88,22 @@ superuser (creating a BYPASSRLS role needs it), same as the owner assumption bel
   and queries join to the parent document. Changing a document's level takes effect on
   the next query, no re-embed. `chunks (doc_id, tenant_id)` is a composite FK to
   `documents (id, tenant_id)` so a chunk cannot carry a different tenant than its document.
+- **Reads vs writes (005).** On `documents` and `chunks`, SELECT is level-based for every
+  role. INSERT / UPDATE / DELETE additionally need `rag_can_write()` (caller level >= the
+  `hr-admin` row of `roles`, looked up not hard-coded; false when context is unset or the
+  role unknown) and, for chunks, a parent document the caller may see. There is no
+  `FOR ALL` policy on either table: exactly one permissive policy applies to each
+  (table, command). Denial shapes callers can rely on:
+  - INSERT by a lower role, or into another tenant: **42501** (RLS WITH CHECK).
+  - UPDATE / DELETE by a lower role: the row fails USING, so **0 rows affected, no error**
+    (standard RLS). Treat 0 rows from an ingest/ACL write as "not allowed or not found".
+  - UPDATE of `tenant_id` (moving a row across tenants), even by hr-admin: **42501**
+    from the RLS WITH CHECK, raised before the chunks->documents FK is looked at.
+  - The API ingest path (hr-admin context: `INSERT ... ON CONFLICT (id) DO UPDATE`,
+    `DELETE FROM chunks WHERE doc_id`, chunk INSERTs) is allowed; retrieval is SELECT only.
+  - `audit_log` is unchanged in shape: tenant wall only, append-only by GRANT, and
+    `query_text` can only ever be NULL (CHECK `audit_log_query_text_never_stored`, 23514
+    for any role; the service stores only `query_hash`).
 - **One expansion, two callers.** `rag_level_allows(caller_level, required_level)` is
   used by the RLS policies *and* must be used by the app filter. `rag_role_level(role_name)`
   maps a JWT role to the level.
@@ -151,8 +168,11 @@ embeddings with the other tenant sitting on the query point). `01`-`09` run as
 not a locked-down role, because otherwise every "0 rows" result is hollow.
 
 They cover: cross-tenant select = 0 rows; wrong role = 0 rows; hr-admin inheritance;
-app filter == RLS; fail-closed / SET LOCAL non-leak; WITH CHECK on writes; audit
-UPDATE/DELETE/TRUNCATE denied; HNSW index present. They do **not** replace EOGHAN's
+app filter == RLS; fail-closed / SET LOCAL non-leak; WITH CHECK on writes (`05`, as hr-admin so the
+tenant wall is proven rather than the role gate); employee/manager can do no INSERT, UPDATE
+or DELETE on documents or chunks while hr-admin can do the whole ingest path (`09`); audit
+UPDATE/DELETE/TRUNCATE denied and `query_text` rejected (`06`); exactly one policy per
+(table, command) (`01`); HNSW index present. They do **not** replace EOGHAN's
 200-query leakage suite, the dropped-policy negative control, or the large-table
 `returned == k` test (the fixture is too small to force the index-window problem).
 
@@ -162,6 +182,10 @@ UPDATE/DELETE/TRUNCATE denied; HNSW index present. They do **not** replace EOGHA
   LEVEL SECURITY` would block a plain non-superuser owner from seeding.
 - The app role cannot move a document to another tenant (WITH CHECK pins `tenant_id` to
   the caller's). Moving a document across tenants is an owner/admin operation.
-- `app_user` can only create documents/chunks at or below its own role level.
+- Only hr-admin can create, change, rename, re-level or delete documents/chunks, and only
+  at or below its own level. The API gate on `/ingest` is no longer the only thing
+  stopping a lower role: the database refuses too (005).
+- Defence in depth is deliberate: a bug in an endpoint that runs as a manager cannot
+  widen or delete documents.
 - `tenants`, `users`, `roles` are read-only for `app_user`; seeding is owner-side.
 - `audit_log` is tenant-scoped by RLS; who may *call* `/audit` is an API rule.

@@ -38,3 +38,30 @@ EXCEPTION WHEN insufficient_privilege OR foreign_key_violation THEN
     RETURN true;
 END
 $$;
+
+-- STRICT denial: true ONLY for SQLSTATE 42501 (privilege / RLS WITH CHECK). A foreign
+-- key (23503) or any other error is NOT accepted, so a test cannot pass because some
+-- unrelated constraint happened to fire first.
+CREATE OR REPLACE FUNCTION pg_temp.denied_42501(p_sql text) RETURNS boolean LANGUAGE plpgsql AS $$
+BEGIN
+    EXECUTE p_sql;
+    RETURN false;
+EXCEPTION WHEN insufficient_privilege THEN
+    RETURN true;
+END
+$$;
+
+-- Rows touched by a statement. RLS never errors on UPDATE/DELETE of rows the policy
+-- hides or forbids: it simply matches 0 rows, so those denials are asserted as 0.
+CREATE OR REPLACE FUNCTION pg_temp.rows_affected(p_sql text) RETURNS bigint LANGUAGE plpgsql AS $$
+DECLARE n bigint;
+BEGIN
+    EXECUTE p_sql;
+    GET DIAGNOSTICS n = ROW_COUNT;
+    RETURN n;
+END
+$$;
+
+-- Any valid 768-dim embedding (all ones: non-zero, so cosine/HNSW accept it).
+CREATE OR REPLACE FUNCTION pg_temp.anyvec() RETURNS vector LANGUAGE sql AS
+    $$ SELECT array_fill(1::real, ARRAY[768])::vector(768) $$;

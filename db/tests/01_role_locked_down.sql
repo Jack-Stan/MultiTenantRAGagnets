@@ -27,12 +27,27 @@ BEGIN
             AND c.relrowsecurity AND c.relforcerowsecurity) = 5,
         'all 5 tables must have RLS enabled AND forced');
 
-    -- Exactly one policy per RLS table (no permissive OR-widening).
+    -- Exactly ONE permissive policy applies to every (table, command): no OR-widening.
+    -- tenants/users/audit_log keep one FOR ALL policy; documents and chunks have separate
+    -- SELECT / INSERT / UPDATE / DELETE policies (005_write_policies.sql) and no FOR ALL.
     PERFORM pg_temp.expect(
-        (SELECT count(*) FROM pg_policies WHERE schemaname = 'public') = 5
-        AND NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public'
-                        GROUP BY tablename HAVING count(*) > 1),
-        'expected exactly one policy on each of the 5 tables');
+        NOT EXISTS (
+            SELECT 1
+            FROM (VALUES ('tenants'), ('users'), ('documents'), ('chunks'), ('audit_log')) t(tbl)
+            CROSS JOIN (VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE')) c(cmd)
+            WHERE (SELECT count(*) FROM pg_policies p
+                    WHERE p.schemaname = 'public' AND p.tablename = t.tbl
+                      AND p.cmd IN (c.cmd, 'ALL')) <> 1),
+        'every (table, command) of the 5 RLS tables must be covered by exactly one policy');
+    PERFORM pg_temp.expect(
+        (SELECT count(*) FROM pg_policies WHERE schemaname = 'public') = 11
+        AND NOT EXISTS (SELECT 1 FROM pg_policies
+                         WHERE schemaname = 'public' AND permissive <> 'PERMISSIVE'),
+        'expected 11 policies (1+1+4+4+1), all permissive');
+    PERFORM pg_temp.expect(
+        NOT EXISTS (SELECT 1 FROM pg_policies
+                     WHERE schemaname = 'public' AND tablename IN ('documents', 'chunks') AND cmd = 'ALL'),
+        'documents and chunks must not have a FOR ALL policy (reads and writes are separate)');
 
     -- Reference/identity data is read-only for the request path.
     PERFORM pg_temp.expect(NOT has_table_privilege('roles',   'INSERT'), 'app_user must not INSERT roles');
