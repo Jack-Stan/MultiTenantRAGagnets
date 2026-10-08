@@ -12,5 +12,3 @@ The project overview lives in the [root README](../README.md).
 | [`TESTING.md`](./TESTING.md) | How you prove it works: the leakage suite, the negative control, retrieval quality, latency, audit tests, keyless CI. |
 
 Start with `TRD.md`.
-
-> The docs still refer to the service as `tenant-safe-rag`, the working name they were written under. It is the same project as this repo.

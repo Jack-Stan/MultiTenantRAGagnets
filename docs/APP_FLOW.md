@@ -1,4 +1,4 @@
-# Application Flow — tenant-safe-rag
+# Application Flow — MultiTenantRAGagnets
 
 This service has no user journey in the UI sense — it is an API. This document
 describes the three **data flows** that matter: **ingestion**, **query**, and the

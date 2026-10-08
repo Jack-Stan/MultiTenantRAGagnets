@@ -1,4 +1,4 @@
-# Implementation Plan — tenant-safe-rag
+# Implementation Plan — MultiTenantRAGagnets
 
 The build order for the MVP, in phases. Each step says what it builds and what it
 depends on. For what the service *is* see [`TRD.md`](./TRD.md); for the flows see

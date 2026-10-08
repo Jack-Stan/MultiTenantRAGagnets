@@ -1,4 +1,4 @@
-# Testing — tenant-safe-rag
+# Testing — MultiTenantRAGagnets
 
 How the service is proved to work. The evaluation harness produces the real numbers
 that are the whole point of this project — there is no CV bullet without measured

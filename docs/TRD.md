@@ -1,4 +1,4 @@
-# Technical Requirements — tenant-safe-rag
+# Technical Requirements — MultiTenantRAGagnets
 
 Permission-aware, multi-tenant Retrieval-Augmented Generation (RAG) service.
 This document says **what the service is and how it works technically**. For the
