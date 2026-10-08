@@ -1,22 +1,8 @@
-# tenant-safe-rag — context docs (staging)
+# Docs
 
-**This folder is a staging area, not the home of these docs.**
+The build-context set for **MultiTenantRAGagnets**: the single source of truth a builder (human or AI) reads **before writing any code**, so context is organised up front instead of guessed at mid-build.
 
-The four documents here (`TRD.md`, `APP_FLOW.md`, `IMPLEMENTATION_PLAN.md`,
-`TESTING.md`) are the build-context set for **`tenant-safe-rag`** — a separate,
-public GitHub repo that does **not exist yet** and could not be created from the
-session that wrote these. They were assembled here so they are version-controlled
-and reviewable in the meantime.
-
-When `tenant-safe-rag` exists, copy these four files into its `docs/` directory
-(i.e. `tenant-safe-rag/docs/TRD.md`, etc.) and delete this staging folder. They are
-written as standard GitHub Markdown — plain repo docs, cross-referencing each other
-by filename — precisely so the copy is a straight move with no rewriting.
-
-## What these are for
-
-They are the single source of truth a builder (human or AI) reads **before writing
-any code**, so context is organised up front instead of guessed at mid-build.
+The project overview lives in the [root README](../README.md).
 
 | File | What it answers |
 |------|-----------------|
@@ -26,3 +12,5 @@ any code**, so context is organised up front instead of guessed at mid-build.
 | [`TESTING.md`](./TESTING.md) | How you prove it works: the leakage suite, the negative control, retrieval quality, latency, audit tests, keyless CI. |
 
 Start with `TRD.md`.
+
+> The docs still refer to the service as `tenant-safe-rag`, the working name they were written under. It is the same project as this repo.
