@@ -331,7 +331,9 @@ public class OllamaQualityTests(OllamaQualityFixture fx)
 
                     // Same security checks as the fake-embedding quality run: quality is not allowed to cost isolation.
                     Assert.All(result.RetrievedChunkIds, id => Assert.Contains(id, visible));
-                    Assert.Equal(Math.Min(k, visible.Count), result.RetrievedChunkIds.Count);
+                    Assert.True(Math.Min(k, visible.Count) == result.RetrievedChunkIds.Count,
+                        $"returned == min(k, visible) violated on [{name}] k={k} question={q.Id} caller={q.TenantSlug}/{q.Role}: " +
+                        $"expected {Math.Min(k, visible.Count)}, got {result.RetrievedChunkIds.Count} (visible={visible.Count}).");
                     Assert.All(q.ExpectedChunkIds, id => Assert.Contains(id, visible));
 
                     recalls.Add(Stats.RecallAtK(result.RetrievedChunkIds, q.ExpectedChunkIds, k));
