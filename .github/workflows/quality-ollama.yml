@@ -5,8 +5,6 @@ name: quality-ollama
 # the Postgres password is generated per run and chat stays the fake LLM (no llama pull).
 on:
   workflow_dispatch:
-  push:
-    branches: [quality/ollama-embeddings] # TEMPORARY: removed again before the branch is finished
 
 permissions:
   contents: read
