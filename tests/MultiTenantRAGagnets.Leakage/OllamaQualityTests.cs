@@ -393,6 +393,35 @@ public class OllamaQualityTests(OllamaQualityFixture fx)
                     L($"DIAG table: total_rows={r.GetValue(0)} tenant_rows(owner)={r.GetValue(1)} null_emb={r.GetValue(2)} zero_norm_emb={r.GetValue(3)} n_live_tup={r.GetValue(4)} last_analyze={r.GetValue(5)} reltuples={r.GetValue(6)}");
             }
 
+            // Graph reachability: can an unfiltered, exhaustive iterative HNSW scan even SEE every row? Owner connection (no RLS).
+            await using (var oc = await fx.OwnerDs.OpenConnectionAsync())
+            {
+                async Task<string> Reach(string label)
+                {
+                    await using var tx = await oc.BeginTransactionAsync();
+                    foreach (var s in new[] { "SET LOCAL enable_seqscan=off", "SET LOCAL enable_sort=off", "SET LOCAL hnsw.iterative_scan='strict_order'", "SET LOCAL hnsw.max_scan_tuples=1000000" })
+                        await using (var c0 = new NpgsqlCommand(s, oc, tx)) await c0.ExecuteNonQueryAsync();
+                    await using var cmd = new NpgsqlCommand(
+                        "WITH r AS (SELECT id FROM chunks ORDER BY embedding <=> @q LIMIT 1000000) " +
+                        "SELECT (SELECT count(*) FROM r), (SELECT count(*) FROM chunks), " +
+                        "(SELECT count(*) FROM chunks c WHERE c.tenant_id=@t AND c.id IN (SELECT id FROM r)), (SELECT count(*) FROM chunks c WHERE c.tenant_id=@t), " +
+                        "(SELECT count(*) FROM chunks c WHERE c.id NOT IN (SELECT id FROM r) AND c.tenant_id NOT IN (SELECT id FROM tenants WHERE slug LIKE 'hostile-%')), " +
+                        "(SELECT count(*) FROM chunks c WHERE c.id NOT IN (SELECT id FROM r) AND c.tenant_id IN (SELECT id FROM tenants WHERE slug LIKE 'hostile-%')), " +
+                        "(SELECT count(*) FROM chunks), (SELECT count(DISTINCT embedding) FROM chunks)", oc, tx);
+                    cmd.Parameters.AddWithValue("q", new Pgvector.Vector(v));
+                    cmd.Parameters.AddWithValue("t", caller.TenantId);
+                    await using var r = await cmd.ExecuteReaderAsync();
+                    await r.ReadAsync();
+                    var res = $"DIAG reach[{label}]: index_returned={r.GetValue(0)} of total={r.GetValue(1)}; caller_tenant {r.GetValue(2)} of {r.GetValue(3)} reachable; unreachable corpus rows={r.GetValue(4)}, unreachable hostile rows={r.GetValue(5)}; distinct embeddings={r.GetValue(7)} of {r.GetValue(6)}";
+                    await r.CloseAsync();
+                    await tx.RollbackAsync();
+                    return res;
+                }
+                L(await Reach("as built"));
+                await using (var rc = new NpgsqlCommand("REINDEX INDEX chunks_embedding_hnsw", oc)) await rc.ExecuteNonQueryAsync();
+                L(await Reach("after REINDEX")); L("DIAG NOTE: the app-user reruns below happen AFTER the REINDEX");
+            }
+
             await using var conn = await ds.OpenConnectionAsync();
             const string sql = """
                 SELECT c.id, c.doc_id, c.tenant_id, c.text, (c.embedding <=> @q)::float8 AS distance
