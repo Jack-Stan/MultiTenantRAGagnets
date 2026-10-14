@@ -417,9 +417,7 @@ public class OllamaQualityTests(OllamaQualityFixture fx)
                     await tx.RollbackAsync();
                     return res;
                 }
-                L(await Reach("as built"));
-                await using (var rc = new NpgsqlCommand("REINDEX INDEX chunks_embedding_hnsw", oc)) await rc.ExecuteNonQueryAsync();
-                L(await Reach("after REINDEX")); L("DIAG NOTE: the app-user reruns below happen AFTER the REINDEX");
+                L(await Reach("as built; read-only"));
             }
 
             await using var conn = await ds.OpenConnectionAsync();
