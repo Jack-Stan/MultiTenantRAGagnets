@@ -124,13 +124,13 @@ The harness was built early, not last, and runs keyless in CI (fake LLM, no secr
 
 **Read these honestly:**
 
-- Embeddings in CI are a deterministic hash, with no semantics. **recall@5 = 0.345 and MRR = 0.196 (exact search; 0.310 and 0.176 on the forced HNSW path) are harness smoke values, not a retrieval-quality result.** Quality needs a run with real Ollama embeddings.
+- Embeddings in CI are a deterministic hash, with no semantics. **recall@5 = 0.345 and MRR = 0.196 (exact search; 0.310 and 0.176 on the forced HNSW path) are harness smoke values, not a retrieval-quality result.** Quality needs a run with real Ollama embeddings: trigger the manual `quality-ollama` workflow (Actions tab, "Run workflow"), or locally set `EMBEDDINGS=ollama` and `OLLAMA_URL` and run the `OllamaQualityTests` test; it writes `results/quality-results-ollama.*`, separate from the leakage results.
 - Latency is for about 2.7k rows on a shared runner with a fake LLM. It is not a production claim and says nothing about real LLM latency.
 - Zero leaks proves the filter and database layers hold under these 200 queries. It does not cover prompt-injection distortion, which is out of scope below.
 
 ## 🗺️ Roadmap
 
-A 15-step build with a defined MVP cut line, in [`docs/IMPLEMENTATION_PLAN.md`](./docs/IMPLEMENTATION_PLAN.md). Steps 1 to 13 are done and proven in CI, including the access-change test (a revoke shows on the next query with no re-embed) and the audit-integrity test. Next: a real-embeddings quality run.
+A 15-step build with a defined MVP cut line, in [`docs/IMPLEMENTATION_PLAN.md`](./docs/IMPLEMENTATION_PLAN.md). Steps 1 to 13 are done and proven in CI, including the access-change test (a revoke shows on the next query with no re-embed) and the audit-integrity test. Next: publish the real-embeddings quality run (the opt-in `quality-ollama` workflow exists; its numbers are not in this README until it has been run and reviewed).
 
 ## 🚧 Honest threat model
 

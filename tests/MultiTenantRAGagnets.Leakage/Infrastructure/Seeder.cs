@@ -87,7 +87,8 @@ public static class Seeder
         }
     }
 
-    public static async Task SeedAsync(NpgsqlDataSource owner, SyntheticCorpus corpus)
+    /// <param name="chunkVectors">Optional real embeddings keyed by chunk id (opt-in Ollama quality run). Null keeps the fake hash embedding.</param>
+    public static async Task SeedAsync(NpgsqlDataSource owner, SyntheticCorpus corpus, IReadOnlyDictionary<Guid, float[]>? chunkVectors = null)
     {
         var tenantIds = corpus.Tenants.Select(t => t.Id)
             .Concat(HostileScenario.Slugs.Select(HostileScenario.TenantId)).ToArray();
@@ -142,7 +143,7 @@ public static class Seeder
         {
             b.Add("INSERT INTO chunks (id, doc_id, tenant_id, chunk_index, text, embedding, version) VALUES (@id, @doc, @t, @idx, @text, @emb, 1)",
                 ("id", c.Id), ("doc", c.DocId), ("t", docTenant[c.DocId]), ("idx", c.ChunkIndex), ("text", c.Text),
-                ("emb", new Vector(FakeEmbeddingProvider.Embed(c.Text))));
+                ("emb", new Vector(chunkVectors is not null ? chunkVectors[c.Id] : FakeEmbeddingProvider.Embed(c.Text))));
             await b.FlushAsync();
         }
         foreach (var (slug, level, index, text, vector) in HostileScenario.Rows())
