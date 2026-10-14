@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Options;
 using Npgsql;
+using NpgsqlTypes;
 using MultiTenantRAGagnets.Core.Providers;
 using MultiTenantRAGagnets.Core.Retrieval;
 using MultiTenantRAGagnets.Eval;
@@ -315,6 +316,10 @@ public class OllamaQualityTests(OllamaQualityFixture fx)
             ("planner default, iterative scan on", fx.AppDs),
         };
 
+        // Diagnostic only: QUALITY_REPEAT=N replays the whole variant/question sweep N times in one process
+        // (results rows are recorded once). Unset means 1, i.e. unchanged behaviour.
+        var repeat = int.TryParse(Environment.GetEnvironmentVariable("QUALITY_REPEAT"), out var rp) && rp > 1 ? rp : 1;
+        for (var rep = 0; rep < repeat; rep++)
         foreach (var (name, ds) in variants)
         {
             var store = new NpgsqlChunkStore(ds);
@@ -331,9 +336,14 @@ public class OllamaQualityTests(OllamaQualityFixture fx)
 
                     // Same security checks as the fake-embedding quality run: quality is not allowed to cost isolation.
                     Assert.All(result.RetrievedChunkIds, id => Assert.Contains(id, visible));
-                    Assert.True(Math.Min(k, visible.Count) == result.RetrievedChunkIds.Count,
-                        $"returned == min(k, visible) violated on [{name}] k={k} question={q.Id} caller={q.TenantSlug}/{q.Role}: " +
-                        $"expected {Math.Min(k, visible.Count)}, got {result.RetrievedChunkIds.Count} (visible={visible.Count}).");
+                    if (Math.Min(k, visible.Count) != result.RetrievedChunkIds.Count)
+                    {
+                        // Assertion strength unchanged; on failure we additionally capture why (plan, GUCs, vector sanity).
+                        var diag = await DiagnoseAsync(fx, ds, caller, q.Text, k, rep);
+                        Assert.Fail(
+                            $"returned == min(k, visible) violated on [{name}] k={k} question={q.Id} caller={q.TenantSlug}/{q.Role}: " +
+                            $"expected {Math.Min(k, visible.Count)}, got {result.RetrievedChunkIds.Count} (visible={visible.Count}).\n{diag}");
+                    }
                     Assert.All(q.ExpectedChunkIds, id => Assert.Contains(id, visible));
 
                     recalls.Add(Stats.RecallAtK(result.RetrievedChunkIds, q.ExpectedChunkIds, k));
@@ -341,15 +351,108 @@ public class OllamaQualityTests(OllamaQualityFixture fx)
                 }
 
                 Assert.Equal(fx.Corpus.Questions.Count, recalls.Count);
-                fx.Results.Quality.Add(new QualityRow
-                {
-                    SearchPath = name,
-                    K = k,
-                    Questions = recalls.Count,
-                    RecallAtK = recalls.Average(),
-                    Mrr = rrs.Average(),
-                });
+                if (rep == 0)
+                    fx.Results.Quality.Add(new QualityRow
+                    {
+                        SearchPath = name,
+                        K = k,
+                        Questions = recalls.Count,
+                        RecallAtK = recalls.Average(),
+                        Mrr = rrs.Average(),
+                    });
             }
         }
+    }
+
+    /// <summary>Failure-path only. Re-runs the failing query on a fresh connection of the same data source and reports facts.</summary>
+    private static async Task<string> DiagnoseAsync(OllamaQualityFixture fx, NpgsqlDataSource ds, CallerContext caller, string question, int k, int rep)
+    {
+        var sb = new StringBuilder();
+        void L(string s) => sb.Append(s).Append('\n');
+        try
+        {
+            var v = await fx.Embeddings.EmbedAsync(question);
+            double ss = 0; var nan = 0; var inf = 0; var zeros = 0;
+            foreach (var x in v)
+            {
+                if (float.IsNaN(x)) nan++;
+                else if (float.IsInfinity(x)) inf++;
+                else { ss += (double)x * x; if (x == 0f) zeros++; }
+            }
+            L($"DIAG rep={rep} query embedding: dim={v.Length} l2norm={Math.Sqrt(ss):0.0000} nan={nan} inf={inf} zeros={zeros} first3=[{v[0]:0.0000},{v[1]:0.0000},{v[2]:0.0000}]");
+
+            await using (var oc = await fx.OwnerDs.OpenConnectionAsync())
+            {
+                await using var cmd = new NpgsqlCommand(
+                    "SELECT (SELECT count(*) FROM chunks), (SELECT count(*) FROM chunks WHERE tenant_id=@t), (SELECT count(*) FROM chunks WHERE embedding IS NULL), " +
+                    "(SELECT count(*) FROM chunks WHERE vector_norm(embedding)=0), (SELECT n_live_tup FROM pg_stat_user_tables WHERE relname='chunks'), " +
+                    "(SELECT last_analyze::text FROM pg_stat_user_tables WHERE relname='chunks'), (SELECT reltuples::bigint FROM pg_class WHERE relname='chunks')", oc);
+                cmd.Parameters.AddWithValue("t", caller.TenantId);
+                await using var r = await cmd.ExecuteReaderAsync();
+                if (await r.ReadAsync())
+                    L($"DIAG table: total_rows={r.GetValue(0)} tenant_rows(owner)={r.GetValue(1)} null_emb={r.GetValue(2)} zero_norm_emb={r.GetValue(3)} n_live_tup={r.GetValue(4)} last_analyze={r.GetValue(5)} reltuples={r.GetValue(6)}");
+            }
+
+            await using var conn = await ds.OpenConnectionAsync();
+            const string sql = """
+                SELECT c.id, c.doc_id, c.tenant_id, c.text, (c.embedding <=> @q)::float8 AS distance
+                FROM chunks c
+                JOIN documents d ON d.id = c.doc_id AND d.tenant_id = c.tenant_id
+                WHERE c.tenant_id = @tenant
+                  AND rag_level_allows(rag_role_level(@role), d.required_level)
+                ORDER BY c.embedding <=> @q
+                LIMIT @k
+                """;
+            void Bind(NpgsqlCommand cmd)
+            {
+                cmd.Parameters.AddWithValue("q", new Pgvector.Vector(v));
+                cmd.Parameters.AddWithValue("k", NpgsqlDbType.Integer, k);
+                cmd.Parameters.AddWithValue("tenant", NpgsqlDbType.Uuid, caller.TenantId);
+                cmd.Parameters.AddWithValue("role", NpgsqlDbType.Text, caller.Role);
+            }
+
+            foreach (var attempt in new[] { 1, 2 })
+            {
+                await using var tx = await conn.BeginTransactionAsync();
+                await using (var cmd = new NpgsqlCommand(
+                    "SELECT set_config('app.tenant_id', @tenant, true), set_config('app.role_level', coalesce(rag_role_level(@role)::text, ''), true)", conn, tx))
+                {
+                    cmd.Parameters.AddWithValue("tenant", NpgsqlDbType.Text, caller.TenantId.ToString("D"));
+                    cmd.Parameters.AddWithValue("role", NpgsqlDbType.Text, caller.Role);
+                    await cmd.ExecuteNonQueryAsync();
+                }
+                await using (var cmd = new NpgsqlCommand("SET LOCAL hnsw.iterative_scan = 'strict_order'", conn, tx))
+                    await cmd.ExecuteNonQueryAsync();
+
+                await using (var cmd = new NpgsqlCommand(
+                    "SELECT current_setting('hnsw.iterative_scan',true), current_setting('hnsw.ef_search',true), current_setting('hnsw.max_scan_tuples',true), " +
+                    "current_setting('enable_seqscan'), current_setting('enable_indexscan'), current_setting('enable_sort'), current_setting('enable_bitmapscan'), " +
+                    "current_setting('app.tenant_id',true), current_setting('app.role_level',true), (SELECT count(*) FROM chunks)", conn, tx))
+                await using (var r = await cmd.ExecuteReaderAsync())
+                {
+                    if (await r.ReadAsync())
+                        L($"DIAG attempt={attempt} gucs: iterative_scan={r.GetValue(0)} ef_search={r.GetValue(1)} max_scan_tuples={r.GetValue(2)} seqscan={r.GetValue(3)} indexscan={r.GetValue(4)} sort={r.GetValue(5)} bitmapscan={r.GetValue(6)} tenant={r.GetValue(7)} role_level={r.GetValue(8)} rows_visible_under_rls={r.GetValue(9)}");
+                }
+
+                await using (var cmd = new NpgsqlCommand("EXPLAIN (ANALYZE, BUFFERS) " + sql, conn, tx))
+                {
+                    Bind(cmd);
+                    await using var r = await cmd.ExecuteReaderAsync();
+                    L($"DIAG attempt={attempt} EXPLAIN ANALYZE:");
+                    while (await r.ReadAsync()) L("   " + r.GetString(0));
+                }
+                await using (var cmd = new NpgsqlCommand("SELECT count(*) FROM (" + sql + ") s", conn, tx))
+                {
+                    Bind(cmd);
+                    L($"DIAG attempt={attempt} rerun row count = {await cmd.ExecuteScalarAsync()}");
+                }
+                await tx.RollbackAsync();
+            }
+        }
+        catch (Exception e)
+        {
+            L($"DIAG collection itself failed: {e.GetType().Name}: {e.Message}");
+        }
+        return sb.ToString();
     }
 }

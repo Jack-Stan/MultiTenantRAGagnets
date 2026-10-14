@@ -1,0 +1,110 @@
+name: quality-ollama-repro (TEMPORARY)
+
+# Manual only. Real-embeddings retrieval-quality run (recall@k / MRR with Ollama nomic-embed-text).
+# Not part of the keyless per-push CI: it downloads a model and is slow. No repo secrets are used;
+# the Postgres password is generated per run and chat stays the fake LLM (no llama pull).
+on:
+  push:
+    branches: [quality/ollama-embeddings]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: recall@k / MRR with Ollama embeddings
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        rep: [1,2,3,4,5,6,7,8,9,10,11,12]
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-throwaway-owner
+          POSTGRES_DB: mtra
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d mtra"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      POSTGRES_USER: postgres
+      POSTGRES_DB: mtra
+      PGPASSWORD: ci-throwaway-owner
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate throwaway app_user and identity_reader passwords
+        run: |
+          pw="$(openssl rand -hex 16)"
+          echo "::add-mask::$pw"
+          echo "APP_USER_PASSWORD=$pw" >> "$GITHUB_ENV"
+          ipw="$(openssl rand -hex 16)"
+          echo "::add-mask::$ipw"
+          echo "IDENTITY_USER_PASSWORD=$ipw" >> "$GITHUB_ENV"
+
+      - name: Apply migrations in filename order
+        run: |
+          for f in db/migrations/*.sql; do
+            echo "== $f"
+            psql -v ON_ERROR_STOP=1 -q -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f "$f"
+          done
+          bash db/migrations/003_app_user_password.sh
+          bash db/migrations/004_identity_user_password.sh
+
+      - name: Install Ollama
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          ollama --version
+
+      - name: Start Ollama and pull the embedding model only
+        run: |
+          nohup ollama serve > ollama.log 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:11434/api/version > /dev/null; then break; fi
+            sleep 2
+          done
+          curl -fsS http://localhost:11434/api/version
+          ollama pull nomic-embed-text
+          ollama list
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Run the opt-in quality test (real embeddings)
+        env:
+          CI: "true"
+          EMBEDDINGS: ollama
+          QUALITY_REPEAT: "5"
+          OLLAMA_URL: http://localhost:11434
+          RESULTS_DIR: ${{ github.workspace }}/results
+        run: |
+          export OWNER_URL="postgres://postgres:ci-throwaway-owner@localhost:5432/mtra"
+          export APP_URL="postgres://app_user:${APP_USER_PASSWORD}@localhost:5432/mtra"
+          dotnet test tests/MultiTenantRAGagnets.Leakage -c Release --nologo \
+            --filter "FullyQualifiedName~OllamaQualityTests"
+
+      - name: Show quality results in the job summary
+        if: always()
+        run: |
+          if [ -f results/quality-results-ollama.md ]; then cat results/quality-results-ollama.md >> "$GITHUB_STEP_SUMMARY"; else echo "No quality-results-ollama.md was produced." >> "$GITHUB_STEP_SUMMARY"; fi
+
+      - name: Upload quality results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-results-ollama-${{ matrix.rep }}
+          path: |
+            results/quality-results-ollama.*
+            ollama.log
+          if-no-files-found: error
