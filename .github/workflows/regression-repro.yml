@@ -69,7 +69,7 @@ jobs:
           export OWNER_URL="postgres://postgres:ci-throwaway-owner@localhost:5432/mtra"
           export APP_URL="postgres://app_user:${APP_USER_PASSWORD}@localhost:5432/mtra"
           dotnet test tests/MultiTenantRAGagnets.Leakage -c Release --nologo \
-            --filter "FullyQualifiedName~IndexExhaustionFallbackTests"
+            --filter "FullyQualifiedName!~OllamaQualityTests"
 
       - name: Show quality results in the job summary
         if: always()
