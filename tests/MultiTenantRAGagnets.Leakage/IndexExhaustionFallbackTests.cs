@@ -16,15 +16,14 @@ namespace MultiTenantRAGagnets.Leakage;
 /// <c>max_scan_tuples</c> was never hit. The plan is "Index Scan using chunks_embedding_hnsw ... rows=0 ... Rows Removed
 /// by Filter: ~2500" and a rerun on the same index returns 0 again; an exact scan returns 5.
 ///
-/// A graph with unreachable nodes cannot be built deterministically, so this test exhausts the index path the other
-/// way: <c>hnsw.max_scan_tuples = 20</c> stops the iterative scan after 20 index tuples. Same observable failure (index
+/// A graph with unreachable nodes cannot be built deterministically, so this test starves the index path the other
+/// way: iterative scan OFF (via the store's internal seam) on the hostile scenario. Same observable failure (index
 /// path returns fewer than k although the caller can see more), same remedy (the store falls back to an exact scan).
 /// The control proves the index path alone under-returns on this connection, so the assertion is not vacuous.
 /// </summary>
 [Collection(LeakageCollection.Name)]
 public class IndexExhaustionFallbackTests(LeakageFixture fx)
 {
-    private const string StarvedIndexOptions = LeakageFixture.ForcedHnswOptions + " -c hnsw.max_scan_tuples=20";
 
     [DbFact]
     public async Task Store_returns_k_when_the_index_path_is_exhausted_before_k_visible_rows_are_found()
@@ -35,13 +34,15 @@ public class IndexExhaustionFallbackTests(LeakageFixture fx)
             Ids.User(HostileScenario.VictimSlug, Roles.Employee),
             Roles.Employee);
 
-        var csb = LeakageFixture.WithOptions(fx.AppConnectionString, StarvedIndexOptions);
-        await using var starved = NpgsqlDataSourceFactory.Create(csb);
+        // Forced HNSW, and iterative scan OFF through the store's internal seam: the index window (ef_search 40) is
+        // all rows the caller may not see, so the bare index path returns 0. hnsw.max_scan_tuples is NOT usable for
+        // this: pgvector drains its "discarded" candidates after the cap and still returns rows (measured in CI).
+        var starved = fx.AppForcedHnswDs;
 
         // Control: the bare index path (RLS-only SQL has no WHERE, so the planner has no alternative to the HNSW index; same settings as the store) under-returns.
         await using (var raw = await RawTx.BeginAsync(starved, victim.TenantId, victim.Role))
         {
-            await raw.ExecAsync("SET LOCAL hnsw.iterative_scan = 'strict_order'");
+            await raw.ExecAsync("SET LOCAL hnsw.iterative_scan = 'off'");
             await using var cmd = new NpgsqlCommand(RetrievalSql.RlsOnlySearch, raw.Conn, raw.Tx);
             cmd.Parameters.AddWithValue("q", new Vector(HostileScenario.QueryPoint));
             cmd.Parameters.AddWithValue("k", k);
@@ -55,7 +56,7 @@ public class IndexExhaustionFallbackTests(LeakageFixture fx)
                 $"CONTROL FAILED: the starved index path returned {n}/{k}; the scenario no longer exercises index exhaustion. max_scan_tuples/ef_search/iterative_scan = {gucs}");
         }
 
-        var store = new NpgsqlChunkStore(starved);
+        var store = new NpgsqlChunkStore(starved, "off");
         foreach (var mode in new[] { RetrievalFilterMode.AppAndRls, RetrievalFilterMode.RlsOnly })
         {
             await using var session = await store.BeginAsync(victim);

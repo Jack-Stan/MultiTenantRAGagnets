@@ -20,11 +20,23 @@ public sealed class NpgsqlChunkStore : IChunkStore
 {
     private readonly NpgsqlDataSource _dataSource;
     private int _roleChecked; // 0 = not yet, 1 = verified
+    private readonly string _iterativeScan;
 
     /// <param name="dataSource">Built by <see cref="NpgsqlDataSourceFactory"/> (pgvector mapping enabled).</param>
-    public NpgsqlChunkStore(NpgsqlDataSource dataSource)
+    public NpgsqlChunkStore(NpgsqlDataSource dataSource) : this(dataSource, "strict_order")
+    {
+    }
+
+    /// <summary>
+    /// TEST SEAM (internal): lets the tests starve the index path deterministically (iterative scan 'off') so the
+    /// exact-scan fallback in <c>Session.SearchAsync</c> can be proven. Production always uses 'strict_order'.
+    /// </summary>
+    internal NpgsqlChunkStore(NpgsqlDataSource dataSource, string iterativeScan)
     {
         _dataSource = dataSource ?? throw new ArgumentNullException(nameof(dataSource));
+        _iterativeScan = iterativeScan is "off" or "strict_order" or "relaxed_order"
+            ? iterativeScan
+            : throw new ArgumentOutOfRangeException(nameof(iterativeScan));
     }
 
     public async Task<IChunkStoreSession> BeginAsync(CallerContext caller, CancellationToken cancellationToken = default)
@@ -53,8 +65,9 @@ public sealed class NpgsqlChunkStore : IChunkStore
             }
 
             // Also the role default (002_rls.sql); belt and braces for TRD 7.3 (iterative index scan).
-            await using (var cmd = new NpgsqlCommand("SET LOCAL hnsw.iterative_scan = 'strict_order'", connection, transaction))
+            await using (var cmd = new NpgsqlCommand("SELECT set_config('hnsw.iterative_scan', @mode, true)", connection, transaction))
             {
+                cmd.Parameters.AddWithValue("mode", NpgsqlDbType.Text, _iterativeScan);
                 await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 
