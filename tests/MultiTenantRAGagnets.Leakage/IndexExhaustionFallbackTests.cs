@@ -48,8 +48,11 @@ public class IndexExhaustionFallbackTests(LeakageFixture fx)
             var n = 0;
             await using var r = await cmd.ExecuteReaderAsync();
             while (await r.ReadAsync()) n++;
+            await r.CloseAsync();
+            var gucs = await raw.ScalarStringAsync(
+                "SELECT current_setting('hnsw.max_scan_tuples',true) || '/' || current_setting('hnsw.ef_search',true) || '/' || current_setting('hnsw.iterative_scan',true)");
             Assert.True(n < k,
-                $"CONTROL FAILED: the starved index path returned {n}/{k}; the scenario no longer exercises index exhaustion.");
+                $"CONTROL FAILED: the starved index path returned {n}/{k}; the scenario no longer exercises index exhaustion. max_scan_tuples/ef_search/iterative_scan = {gucs}");
         }
 
         var store = new NpgsqlChunkStore(starved);
