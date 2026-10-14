@@ -117,6 +117,39 @@ public sealed class NpgsqlChunkStore : IChunkStore
             if (k < 1) throw new ArgumentOutOfRangeException(nameof(k));
 
             var filtered = mode == RetrievalFilterMode.AppAndRls;
+            var results = await RunSearchAsync(filtered, queryEmbedding, k, cancellationToken).ConfigureAwait(false);
+            if (results.Count >= k) return results;
+
+            // Under-fill. Either the caller really can see fewer than k chunks (then the exact scan below returns the
+            // same rows, at the cost of one extra query), or the approximate HNSW path missed rows it should have
+            // found. The second case is real and silent: an HNSW graph can leave rows unreachable (measured in CI:
+            // about 5 percent of a 2665-row table, all 36 rows of one tenant, deterministic per index build), and an
+            // iterative scan only walks reachable nodes, so it returns 0 of k even though 15 chunks are visible.
+            // An exact scan (index scans off, RLS and the tenant filter unchanged) cannot miss. It is only taken
+            // when the approximate path under-filled, so the common case keeps the index latency.
+            string previous;
+            await using (var cmd = new NpgsqlCommand("SELECT current_setting('enable_indexscan')", _connection, _transaction))
+                previous = (string)(await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
+            await SetIndexScanAsync("off", cancellationToken).ConfigureAwait(false);
+            try
+            {
+                return await RunSearchAsync(filtered, queryEmbedding, k, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                await SetIndexScanAsync(previous, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        private async Task SetIndexScanAsync(string value, CancellationToken cancellationToken)
+        {
+            await using var cmd = new NpgsqlCommand("SELECT set_config('enable_indexscan', @v, true)", _connection, _transaction);
+            cmd.Parameters.AddWithValue("v", NpgsqlDbType.Text, value);
+            await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        private async Task<List<RetrievedChunk>> RunSearchAsync(bool filtered, float[] queryEmbedding, int k, CancellationToken cancellationToken)
+        {
             await using var cmd = new NpgsqlCommand(filtered ? RetrievalSql.FilteredSearch : RetrievalSql.RlsOnlySearch, _connection, _transaction);
             cmd.Parameters.AddWithValue("q", new Vector(queryEmbedding));
             cmd.Parameters.AddWithValue("k", NpgsqlDbType.Integer, k);
