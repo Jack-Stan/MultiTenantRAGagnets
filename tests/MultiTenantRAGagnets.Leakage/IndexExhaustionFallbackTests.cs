@@ -38,15 +38,13 @@ public class IndexExhaustionFallbackTests(LeakageFixture fx)
         var csb = LeakageFixture.WithOptions(fx.AppConnectionString, StarvedIndexOptions);
         await using var starved = NpgsqlDataSourceFactory.Create(csb);
 
-        // Control: the bare index path (same settings, same SQL as the store's first attempt) under-returns.
+        // Control: the bare index path (RLS-only SQL has no WHERE, so the planner has no alternative to the HNSW index; same settings as the store) under-returns.
         await using (var raw = await RawTx.BeginAsync(starved, victim.TenantId, victim.Role))
         {
             await raw.ExecAsync("SET LOCAL hnsw.iterative_scan = 'strict_order'");
-            await using var cmd = new NpgsqlCommand(RetrievalSql.FilteredSearch, raw.Conn, raw.Tx);
+            await using var cmd = new NpgsqlCommand(RetrievalSql.RlsOnlySearch, raw.Conn, raw.Tx);
             cmd.Parameters.AddWithValue("q", new Vector(HostileScenario.QueryPoint));
             cmd.Parameters.AddWithValue("k", k);
-            cmd.Parameters.AddWithValue("tenant", victim.TenantId);
-            cmd.Parameters.AddWithValue("role", victim.Role);
             var n = 0;
             await using var r = await cmd.ExecuteReaderAsync();
             while (await r.ReadAsync()) n++;
