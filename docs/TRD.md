@@ -169,3 +169,19 @@ Explicitly out of scope for the first shippable version:
 - **Token forgery.** The JWT is the identity source; v1 does not defend a forged
   token beyond standard signature verification. The signing key lives in
   env / user-secrets, **never committed**.
+
+## 4.1 Current-edition ranking preference (opt-in)
+
+`documents.superseded_at` (migration 006, NULL = current) marks a withdrawn edition. It is a ranking signal joined at query time like `required_level`; it is never in an RLS policy, chunks carry no copy, and writes follow the 005 write policies (hr-admin of the tenant only). `RetrievalOptions.PreferCurrentEdition` (default **off**) over-fetches `k x CurrentEditionCandidateMultiplier` nearest PERMITTED candidates through the unchanged tenant + role predicate and index path, orders them by `distance + SupersededDistancePenalty` for superseded chunks, and returns k. It reorders; it cannot admit a row. The exact-scan fallback and `returned == min(k, visible)` are keyed on k and unchanged.
+
+Measured on the hard corpus with nomic-embed-text (CI runs 38731892701 and 38731903328 on `ranking/prefer-current-edition`, `results/quality-results-ollama-hard-ranking.md`), exact search, k = 5, preference off versus soft 0.05 with a 4 x k pool:
+
+| Category | MRR@5 off | MRR@5 on | note |
+|---|---|---|---|
+| near-dup | 0.501 | 0.985 | superseded share of top-5 0.795 to 0.755 (still returned, ranked after current) |
+| paraphrase | 0.492 | 0.585 | withdrawn editions were noise for these too |
+| reference | 0.672 | 0.734 | |
+| keyword, distractor, multi-chunk | 0.898, 0.721, 0.733 | 0.898, 0.721, 0.735 | unchanged |
+| withdrawn-reachability (extra probe) | 0.780 | 0.385 | recall@5 1.000 to 0.932: the cost |
+
+Strict (penalty 2.0) reaches the same near-dup MRR but hides withdrawn editions (withdrawn-reachability recall@5 0.182), so it is not the default penalty. The signal in this measurement comes from the generator's own document kinds (correct metadata); it does not measure detecting staleness from text.

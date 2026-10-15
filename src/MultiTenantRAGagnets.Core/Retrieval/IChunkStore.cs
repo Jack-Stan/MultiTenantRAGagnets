@@ -4,7 +4,7 @@ using MultiTenantRAGagnets.Core.Ingestion;
 namespace MultiTenantRAGagnets.Core.Retrieval;
 
 /// <summary>A chunk returned by vector search. Carries its tenant so the service can assert the wall.</summary>
-public sealed record RetrievedChunk(Guid Id, Guid DocumentId, Guid TenantId, string Text, double Distance);
+public sealed record RetrievedChunk(Guid Id, Guid DocumentId, Guid TenantId, string Text, double Distance, bool Superseded = false);
 
 /// <summary>How the vector search is filtered.</summary>
 public enum RetrievalFilterMode
@@ -35,8 +35,18 @@ public interface IChunkStore
 /// </summary>
 public interface IChunkStoreSession : IAsyncDisposable
 {
+    /// <summary>Plain search: no ranking preference (the behaviour before the preference existed).</summary>
     Task<IReadOnlyList<RetrievedChunk>> SearchAsync(
-        float[] queryEmbedding, int k, RetrievalFilterMode mode, CancellationToken cancellationToken = default);
+        float[] queryEmbedding, int k, RetrievalFilterMode mode, CancellationToken cancellationToken = default) =>
+        SearchAsync(queryEmbedding, k, mode, RankingPreference.None, cancellationToken);
+
+    /// <summary>
+    /// Search with a ranking preference. Contract for implementers: the candidate pool is the caller's PERMITTED chunks
+    /// only (same tenant + role predicate and RLS as the plain search); the preference reorders that pool and must
+    /// never add a row to it. Still returns exactly min(k, visible) rows.
+    /// </summary>
+    Task<IReadOnlyList<RetrievedChunk>> SearchAsync(
+        float[] queryEmbedding, int k, RetrievalFilterMode mode, RankingPreference ranking, CancellationToken cancellationToken = default);
 
     Task AppendAuditAsync(AuditEntry entry, CancellationToken cancellationToken = default);
 

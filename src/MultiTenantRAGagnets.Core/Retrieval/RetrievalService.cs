@@ -79,7 +79,7 @@ public sealed class RetrievalService
 
         await using var session = await _store.BeginAsync(caller, ct).ConfigureAwait(false);
 
-        var retrieved = await session.SearchAsync(embedding, k, mode, ct).ConfigureAwait(false);
+        var retrieved = await session.SearchAsync(embedding, k, mode, _options.ToRankingPreference(), ct).ConfigureAwait(false);
 
         if (mode == RetrievalFilterMode.AppAndRls)
         {
