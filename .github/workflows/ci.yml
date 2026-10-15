@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [main, quality/harder-corpus]
   pull_request:
 
 # Keyless: the Postgres password is generated per run, nothing comes from repo secrets,
