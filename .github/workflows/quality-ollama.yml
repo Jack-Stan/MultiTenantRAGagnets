@@ -4,6 +4,8 @@ name: quality-ollama
 # Not part of the keyless per-push CI: it downloads a model and is slow. No repo secrets are used;
 # the Postgres password is generated per run and chat stays the fake LLM (no llama pull).
 on:
+  push:
+    branches: [quality/harder-corpus]
   workflow_dispatch:
     inputs:
       corpus:
@@ -87,7 +89,7 @@ jobs:
         env:
           CI: "true"
           EMBEDDINGS: ollama
-          CORPUS: ${{ inputs.corpus }}
+          CORPUS: ${{ inputs.corpus || 'standard' }}
           OLLAMA_URL: http://localhost:11434
           RESULTS_DIR: ${{ github.workspace }}/results
         run: |
