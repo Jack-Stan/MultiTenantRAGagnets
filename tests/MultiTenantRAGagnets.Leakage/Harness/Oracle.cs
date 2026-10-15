@@ -57,6 +57,39 @@ public sealed class CorpusOracle
 
     public Guid TenantId(string slug) => _tenantIds[slug];
 
+    /// <summary>
+    /// Hard profile only: one label per (question, tenant, role) with gold chunk ids and AnswerPermitted
+    /// (false = the answer is above the caller's role, so "none permitted" is the correct outcome). Empty for the
+    /// standard corpus, whose labelled questions are <see cref="SyntheticCorpus.Questions"/>.
+    /// </summary>
+    public IReadOnlyList<GoldLabel> Gold => Corpus.Hard?.Gold ?? [];
+
+    /// <summary>
+    /// Run-time cross-check of the gold labels against the manifest the database was just verified to match.
+    /// Throws on the first contradiction: a wrong label would make every number below it meaningless.
+    /// </summary>
+    public void VerifyGold()
+    {
+        foreach (var g in Gold)
+        {
+            var visible = VisibleChunks(g.TenantSlug, g.Role);
+            if (g.GoldChunkIds.Count == 0)
+                throw new InvalidOperationException($"Gold {g.Id} has no gold chunks.");
+            foreach (var id in g.GoldChunkIds)
+            {
+                if (!ChunkById.TryGetValue(id, out var c))
+                    throw new InvalidOperationException($"Gold {g.Id}: chunk {id} is not in the corpus.");
+                if (c.TenantSlug != g.TenantSlug)
+                    throw new InvalidOperationException($"Gold {g.Id}: chunk {id} belongs to tenant {c.TenantSlug}, asker is {g.TenantSlug}.");
+                if (visible.Contains(id) != g.AnswerPermitted)
+                    throw new InvalidOperationException(
+                        $"Gold {g.Id}: AnswerPermitted={g.AnswerPermitted} but chunk {id} visibility for {g.TenantSlug}/{g.Role} is {visible.Contains(id)}.");
+            }
+            if (g.AnswerPermitted != (g.PermittedGoldChunkIds.Count > 0))
+                throw new InvalidOperationException($"Gold {g.Id}: PermittedGoldChunkIds disagrees with AnswerPermitted.");
+        }
+    }
+
     public CallerContext CallerFor(string tenantSlug, string role) =>
         new(TenantId(tenantSlug), Ids.User(tenantSlug, role), role);
 }
