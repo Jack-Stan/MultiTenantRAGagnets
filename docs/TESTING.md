@@ -135,3 +135,17 @@ a leak; this test is what proves it isn't.
 5. Every query audited; audit-integrity and append-only tests green.
 6. Access change reflected on the next query with no re-embed.
 7. The whole harness runs keyless in CI on the fake LLM, results published.
+
+## Real-embeddings quality run (opt-in)
+
+The default suite uses hash embeddings, so its recall@k / MRR are harness smoke values. To measure quality with
+real embeddings, set `EMBEDDINGS=ollama` (and `OLLAMA_URL`, default `http://localhost:11434`, with
+`nomic-embed-text` pulled) next to `OWNER_URL` / `APP_URL`, then:
+
+```
+dotnet test tests/MultiTenantRAGagnets.Leakage -c Release --filter "FullyQualifiedName~OllamaQualityTests"
+```
+
+It ingests and queries with `OllamaProvider`, runs the same exact / forced-HNSW / planner-default paths with the same
+isolation assertions, and writes `results/quality-results-ollama.json` and `.md` (never `leakage-results.*`). Without
+`EMBEDDINGS=ollama` the test is skipped. In GitHub Actions use the manual `quality-ollama` workflow.

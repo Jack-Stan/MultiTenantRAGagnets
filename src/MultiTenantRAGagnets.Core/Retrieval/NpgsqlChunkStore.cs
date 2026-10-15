@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 using NpgsqlTypes;
 using Pgvector;
@@ -20,11 +22,34 @@ public sealed class NpgsqlChunkStore : IChunkStore
 {
     private readonly NpgsqlDataSource _dataSource;
     private int _roleChecked; // 0 = not yet, 1 = verified
+    private readonly string _iterativeScan;
+    private readonly ILogger _logger;
+    private long _indexFallbackCount;
+
+    /// <summary>
+    /// How many searches on THIS store instance fell back to the exact scan. Same events as the process-wide
+    /// <c>retrieval.index_fallback</c> counter, but scoped to the instance so a test or a results writer can read it.
+    /// </summary>
+    public long IndexFallbackCount => Interlocked.Read(ref _indexFallbackCount);
 
     /// <param name="dataSource">Built by <see cref="NpgsqlDataSourceFactory"/> (pgvector mapping enabled).</param>
-    public NpgsqlChunkStore(NpgsqlDataSource dataSource)
+    /// <param name="logger">Optional; the fallback warning goes here. Silent (null logger) when omitted.</param>
+    public NpgsqlChunkStore(NpgsqlDataSource dataSource, ILogger<NpgsqlChunkStore>? logger = null)
+        : this(dataSource, "strict_order", logger)
     {
+    }
+
+    /// <summary>
+    /// TEST SEAM (internal): lets the tests starve the index path deterministically (iterative scan 'off') so the
+    /// exact-scan fallback in <c>Session.SearchAsync</c> can be proven. Production always uses 'strict_order'.
+    /// </summary>
+    internal NpgsqlChunkStore(NpgsqlDataSource dataSource, string iterativeScan, ILogger? logger = null)
+    {
+        _logger = logger ?? NullLogger.Instance;
         _dataSource = dataSource ?? throw new ArgumentNullException(nameof(dataSource));
+        _iterativeScan = iterativeScan is "off" or "strict_order" or "relaxed_order"
+            ? iterativeScan
+            : throw new ArgumentOutOfRangeException(nameof(iterativeScan));
     }
 
     public async Task<IChunkStoreSession> BeginAsync(CallerContext caller, CancellationToken cancellationToken = default)
@@ -53,12 +78,13 @@ public sealed class NpgsqlChunkStore : IChunkStore
             }
 
             // Also the role default (002_rls.sql); belt and braces for TRD 7.3 (iterative index scan).
-            await using (var cmd = new NpgsqlCommand("SET LOCAL hnsw.iterative_scan = 'strict_order'", connection, transaction))
+            await using (var cmd = new NpgsqlCommand("SELECT set_config('hnsw.iterative_scan', @mode, true)", connection, transaction))
             {
+                cmd.Parameters.AddWithValue("mode", NpgsqlDbType.Text, _iterativeScan);
                 await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 
-            return new Session(connection, transaction, caller);
+            return new Session(connection, transaction, caller, this);
         }
         catch
         {
@@ -88,10 +114,12 @@ public sealed class NpgsqlChunkStore : IChunkStore
         private readonly NpgsqlConnection _connection;
         private readonly NpgsqlTransaction _transaction;
         private readonly CallerContext _caller;
+        private readonly NpgsqlChunkStore _store;
         private bool _committed;
 
-        public Session(NpgsqlConnection connection, NpgsqlTransaction transaction, CallerContext caller)
+        public Session(NpgsqlConnection connection, NpgsqlTransaction transaction, CallerContext caller, NpgsqlChunkStore store)
         {
+            _store = store;
             _connection = connection;
             _transaction = transaction;
             _caller = caller;
@@ -104,6 +132,48 @@ public sealed class NpgsqlChunkStore : IChunkStore
             if (k < 1) throw new ArgumentOutOfRangeException(nameof(k));
 
             var filtered = mode == RetrievalFilterMode.AppAndRls;
+            var results = await RunSearchAsync(filtered, queryEmbedding, k, cancellationToken).ConfigureAwait(false);
+            if (results.Count >= k) return results;
+
+            // Under-fill. Either the caller really can see fewer than k chunks (then the exact scan below returns the
+            // same rows, at the cost of one extra query), or the approximate HNSW path missed rows it should have
+            // found. The second case is real and silent: an HNSW graph can leave rows unreachable (measured in CI:
+            // about 5 percent of a 2665-row table, all 36 rows of one tenant, deterministic per index build), and an
+            // iterative scan only walks reachable nodes, so it returns 0 of k even though 15 chunks are visible.
+            // An exact scan (index scans off, RLS and the tenant filter unchanged) cannot miss. It is only taken
+            // when the approximate path under-filled, so the common case keeps the index latency.
+            string previous;
+            await using (var cmd = new NpgsqlCommand("SELECT current_setting('enable_indexscan')", _connection, _transaction))
+                previous = (string)(await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
+            await SetIndexScanAsync("off", cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var exact = await RunSearchAsync(filtered, queryEmbedding, k, cancellationToken).ConfigureAwait(false);
+
+                // Observable by design: a silent fallback hides a degraded index. Counts and ids only; never the
+                // query text, the embedding or any chunk text. TenantId is a GUID (the same value is in audit_log).
+                Interlocked.Increment(ref _store._indexFallbackCount);
+                RetrievalMetrics.RecordIndexFallback();
+                _store._logger.LogWarning(
+                    "Retrieval index fallback: index path under-filled, exact scan used. TenantId={TenantId} Mode={Mode} RequestedK={RequestedK} IndexRows={IndexRows} ExactRows={ExactRows}",
+                    _caller.TenantId, mode, k, results.Count, exact.Count);
+                return exact;
+            }
+            finally
+            {
+                await SetIndexScanAsync(previous, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        private async Task SetIndexScanAsync(string value, CancellationToken cancellationToken)
+        {
+            await using var cmd = new NpgsqlCommand("SELECT set_config('enable_indexscan', @v, true)", _connection, _transaction);
+            cmd.Parameters.AddWithValue("v", NpgsqlDbType.Text, value);
+            await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        private async Task<List<RetrievedChunk>> RunSearchAsync(bool filtered, float[] queryEmbedding, int k, CancellationToken cancellationToken)
+        {
             await using var cmd = new NpgsqlCommand(filtered ? RetrievalSql.FilteredSearch : RetrievalSql.RlsOnlySearch, _connection, _transaction);
             cmd.Parameters.AddWithValue("q", new Vector(queryEmbedding));
             cmd.Parameters.AddWithValue("k", NpgsqlDbType.Integer, k);
