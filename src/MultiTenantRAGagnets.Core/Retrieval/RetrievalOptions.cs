@@ -22,8 +22,12 @@ public sealed class RetrievalOptions
     /// <summary>Over-fetch factor for <see cref="PreferCurrentEdition"/>: the pool is k times this.</summary>
     public int CurrentEditionCandidateMultiplier { get; set; } = 4;
 
-    /// <summary>Distance added to a superseded chunk. 2.0 or more is strict (cosine distance is at most 2).</summary>
-    public double SupersededDistancePenalty { get; set; } = 2.0;
+    /// <summary>
+    /// Distance added to a superseded chunk. Default 0.05 (soft): measured to fix near-duplicate ranking while keeping
+    /// withdrawn editions reachable. 2.0 or more is strict and HIDES withdrawn editions from the top k when current
+    /// candidates exist (measured: withdrawn-edition recall@5 fell from 1.0 to 0.18). See docs/TRD.md section 4.1.
+    /// </summary>
+    public double SupersededDistancePenalty { get; set; } = 0.05;
 
     /// <summary>The ranking preference this configuration asks the store for.</summary>
     public RankingPreference ToRankingPreference() => PreferCurrentEdition
