@@ -245,12 +245,14 @@ public class CurrentEditionRankingTests
         var accessor = new CallerAccessor();
         accessor.Set(caller);
         var writer = new StoreBackedChunkWriter(rig.Store, accessor);
+        // withdrawn chunk at 0.1, current at 0.3: only a penalty above 0.2 reorders them, so pin the strict one here.
         var vec = AtDistance(0.1, 1);
         var oldDoc = new MultiTenantRAGagnets.Core.Ingestion.DocumentRecord(Id(500), TenantA, "Policy (superseded)", 1, 1, Superseded: true);
         var newDoc = new MultiTenantRAGagnets.Core.Ingestion.DocumentRecord(Id(501), TenantA, "Policy", 1, 1);
         await writer.StoreAsync(oldDoc, [new(Id(1), Id(500), TenantA, 0, "old", vec, 1)]);
         await writer.StoreAsync(newDoc, [new(Id(2), Id(501), TenantA, 0, "new", AtDistance(0.3, 2), 1)]);
 
+        rig.Options.SupersededDistancePenalty = 2.0;
         rig.Options.PreferCurrentEdition = true;
         var result = await rig.Service.QueryAsync(caller, "q", k: 1);
         Assert.Equal([Id(2)], result.RetrievedChunkIds);
