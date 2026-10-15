@@ -1,0 +1,526 @@
+{
+  "corpusProfile": "hard",
+  "hardCorpus": {
+    "documentsCurrent": 96,
+    "documentsSuperseded": 96,
+    "documentsDistractor": 120,
+    "documentsNoise": 192,
+    "documentsInjection": 8,
+    "questionInstances": 1152,
+    "answerableInstances": 768,
+    "aboveRoleInstances": 384,
+    "distinctTextsByCategory": {
+      "keyword": 12,
+      "paraphrase": 72,
+      "multi-chunk": 36,
+      "near-dup": 12,
+      "distractor": 12,
+      "reference": 48
+    },
+    "answerableInstancesByCategory": {
+      "keyword": 54,
+      "paraphrase": 288,
+      "multi-chunk": 144,
+      "near-dup": 44,
+      "distractor": 46,
+      "reference": 192
+    }
+  },
+  "perCategory": [
+    {
+      "searchPath": "exact search (index scans off)",
+      "k": 5,
+      "category": "keyword",
+      "questions": 54,
+      "distinctQuestionTexts": 12,
+      "recallAtK": 1,
+      "mrr": 0.8981481481481481,
+      "completeAtK": 1
+    },
+    {
+      "searchPath": "exact search (index scans off)",
+      "k": 5,
+      "category": "paraphrase",
+      "questions": 288,
+      "distinctQuestionTexts": 72,
+      "recallAtK": 0.7604166666666666,
+      "mrr": 0.49247685185185147,
+      "completeAtK": 0.8194444444444444
+    },
+    {
+      "searchPath": "exact search (index scans off)",
+      "k": 5,
+      "category": "multi-chunk",
+      "questions": 144,
+      "distinctQuestionTexts": 36,
+      "recallAtK": 0.6261574074074073,
+      "mrr": 0.7325231481481481,
+      "completeAtK": 0.3472222222222222
+    },
+    {
+      "searchPath": "exact search (index scans off)",
+      "k": 5,
+      "category": "near-dup",
+      "questions": 44,
+      "distinctQuestionTexts": 12,
+      "recallAtK": 0.9772727272727273,
+      "mrr": 0.5011363636363634,
+      "completeAtK": 0.9772727272727273
+    },
+    {
+      "searchPath": "exact search (index scans off)",
+      "k": 5,
+      "category": "distractor",
+      "questions": 46,
+      "distinctQuestionTexts": 12,
+      "recallAtK": 1,
+      "mrr": 0.7210144927536233,
+      "completeAtK": 1
+    },
+    {
+      "searchPath": "exact search (index scans off)",
+      "k": 5,
+      "category": "reference",
+      "questions": 192,
+      "distinctQuestionTexts": 48,
+      "recallAtK": 0.8932291666666666,
+      "mrr": 0.6715277777777778,
+      "completeAtK": 0.90625
+    },
+    {
+      "searchPath": "exact search (index scans off)",
+      "k": 10,
+      "category": "keyword",
+      "questions": 54,
+      "distinctQuestionTexts": 12,
+      "recallAtK": 1,
+      "mrr": 0.8981481481481481,
+      "completeAtK": 1
+    },
+    {
+      "searchPath": "exact search (index scans off)",
+      "k": 10,
+      "category": "paraphrase",
+      "questions": 288,
+      "distinctQuestionTexts": 72,
+      "recallAtK": 0.890625,
+      "mrr": 0.5072475749559078,
+      "completeAtK": 0.9270833333333334
+    },
+    {
+      "searchPath": "exact search (index scans off)",
+      "k": 10,
+      "category": "multi-chunk",
+      "questions": 144,
+      "distinctQuestionTexts": 36,
+      "recallAtK": 0.7488425925925924,
+      "mrr": 0.7403549382716049,
+      "completeAtK": 0.5486111111111112
+    },
+    {
+      "searchPath": "exact search (index scans off)",
+      "k": 10,
+      "category": "near-dup",
+      "questions": 44,
+      "distinctQuestionTexts": 12,
+      "recallAtK": 1,
+      "mrr": 0.5043831168831168,
+      "completeAtK": 1
+    },
+    {
+      "searchPath": "exact search (index scans off)",
+      "k": 10,
+      "category": "distractor",
+      "questions": 46,
+      "distinctQuestionTexts": 12,
+      "recallAtK": 1,
+      "mrr": 0.7210144927536233,
+      "completeAtK": 1
+    },
+    {
+      "searchPath": "exact search (index scans off)",
+      "k": 10,
+      "category": "reference",
+      "questions": 192,
+      "distinctQuestionTexts": 48,
+      "recallAtK": 0.9739583333333334,
+      "mrr": 0.6820188492063491,
+      "completeAtK": 0.9791666666666666
+    },
+    {
+      "searchPath": "HNSW forced, iterative scan on",
+      "k": 5,
+      "category": "keyword",
+      "questions": 54,
+      "distinctQuestionTexts": 12,
+      "recallAtK": 1,
+      "mrr": 0.8981481481481481,
+      "completeAtK": 1
+    },
+    {
+      "searchPath": "HNSW forced, iterative scan on",
+      "k": 5,
+      "category": "paraphrase",
+      "questions": 288,
+      "distinctQuestionTexts": 72,
+      "recallAtK": 0.7083333333333334,
+      "mrr": 0.4504050925925923,
+      "completeAtK": 0.7673611111111112
+    },
+    {
+      "searchPath": "HNSW forced, iterative scan on",
+      "k": 5,
+      "category": "multi-chunk",
+      "questions": 144,
+      "distinctQuestionTexts": 36,
+      "recallAtK": 0.6296296296296295,
+      "mrr": 0.7458333333333332,
+      "completeAtK": 0.3472222222222222
+    },
+    {
+      "searchPath": "HNSW forced, iterative scan on",
+      "k": 5,
+      "category": "near-dup",
+      "questions": 44,
+      "distinctQuestionTexts": 12,
+      "recallAtK": 0.9772727272727273,
+      "mrr": 0.5011363636363634,
+      "completeAtK": 0.9772727272727273
+    },
+    {
+      "searchPath": "HNSW forced, iterative scan on",
+      "k": 5,
+      "category": "distractor",
+      "questions": 46,
+      "distinctQuestionTexts": 12,
+      "recallAtK": 1,
+      "mrr": 0.7210144927536233,
+      "completeAtK": 1
+    },
+    {
+      "searchPath": "HNSW forced, iterative scan on",
+      "k": 5,
+      "category": "reference",
+      "questions": 192,
+      "distinctQuestionTexts": 48,
+      "recallAtK": 0.8776041666666666,
+      "mrr": 0.6559027777777778,
+      "completeAtK": 0.890625
+    },
+    {
+      "searchPath": "HNSW forced, iterative scan on",
+      "k": 10,
+      "category": "keyword",
+      "questions": 54,
+      "distinctQuestionTexts": 12,
+      "recallAtK": 1,
+      "mrr": 0.8981481481481481,
+      "completeAtK": 1
+    },
+    {
+      "searchPath": "HNSW forced, iterative scan on",
+      "k": 10,
+      "category": "paraphrase",
+      "questions": 288,
+      "distinctQuestionTexts": 72,
+      "recallAtK": 0.828125,
+      "mrr": 0.4632908950617282,
+      "completeAtK": 0.8645833333333334
+    },
+    {
+      "searchPath": "HNSW forced, iterative scan on",
+      "k": 10,
+      "category": "multi-chunk",
+      "questions": 144,
+      "distinctQuestionTexts": 36,
+      "recallAtK": 0.7546296296296295,
+      "mrr": 0.7531415343915344,
+      "completeAtK": 0.5555555555555556
+    },
+    {
+      "searchPath": "HNSW forced, iterative scan on",
+      "k": 10,
+      "category": "near-dup",
+      "questions": 44,
+      "distinctQuestionTexts": 12,
+      "recallAtK": 1,
+      "mrr": 0.5043831168831168,
+      "completeAtK": 1
+    },
+    {
+      "searchPath": "HNSW forced, iterative scan on",
+      "k": 10,
+      "category": "distractor",
+      "questions": 46,
+      "distinctQuestionTexts": 12,
+      "recallAtK": 1,
+      "mrr": 0.7210144927536233,
+      "completeAtK": 1
+    },
+    {
+      "searchPath": "HNSW forced, iterative scan on",
+      "k": 10,
+      "category": "reference",
+      "questions": 192,
+      "distinctQuestionTexts": 48,
+      "recallAtK": 0.9583333333333334,
+      "mrr": 0.6663938492063493,
+      "completeAtK": 0.9635416666666666
+    },
+    {
+      "searchPath": "planner default, iterative scan on",
+      "k": 5,
+      "category": "keyword",
+      "questions": 54,
+      "distinctQuestionTexts": 12,
+      "recallAtK": 1,
+      "mrr": 0.8981481481481481,
+      "completeAtK": 1
+    },
+    {
+      "searchPath": "planner default, iterative scan on",
+      "k": 5,
+      "category": "paraphrase",
+      "questions": 288,
+      "distinctQuestionTexts": 72,
+      "recallAtK": 0.7083333333333334,
+      "mrr": 0.4504050925925923,
+      "completeAtK": 0.7673611111111112
+    },
+    {
+      "searchPath": "planner default, iterative scan on",
+      "k": 5,
+      "category": "multi-chunk",
+      "questions": 144,
+      "distinctQuestionTexts": 36,
+      "recallAtK": 0.6296296296296295,
+      "mrr": 0.7458333333333332,
+      "completeAtK": 0.3472222222222222
+    },
+    {
+      "searchPath": "planner default, iterative scan on",
+      "k": 5,
+      "category": "near-dup",
+      "questions": 44,
+      "distinctQuestionTexts": 12,
+      "recallAtK": 0.9772727272727273,
+      "mrr": 0.5011363636363634,
+      "completeAtK": 0.9772727272727273
+    },
+    {
+      "searchPath": "planner default, iterative scan on",
+      "k": 5,
+      "category": "distractor",
+      "questions": 46,
+      "distinctQuestionTexts": 12,
+      "recallAtK": 1,
+      "mrr": 0.7210144927536233,
+      "completeAtK": 1
+    },
+    {
+      "searchPath": "planner default, iterative scan on",
+      "k": 5,
+      "category": "reference",
+      "questions": 192,
+      "distinctQuestionTexts": 48,
+      "recallAtK": 0.8776041666666666,
+      "mrr": 0.6559027777777778,
+      "completeAtK": 0.890625
+    },
+    {
+      "searchPath": "planner default, iterative scan on",
+      "k": 10,
+      "category": "keyword",
+      "questions": 54,
+      "distinctQuestionTexts": 12,
+      "recallAtK": 1,
+      "mrr": 0.8981481481481481,
+      "completeAtK": 1
+    },
+    {
+      "searchPath": "planner default, iterative scan on",
+      "k": 10,
+      "category": "paraphrase",
+      "questions": 288,
+      "distinctQuestionTexts": 72,
+      "recallAtK": 0.890625,
+      "mrr": 0.5072475749559078,
+      "completeAtK": 0.9270833333333334
+    },
+    {
+      "searchPath": "planner default, iterative scan on",
+      "k": 10,
+      "category": "multi-chunk",
+      "questions": 144,
+      "distinctQuestionTexts": 36,
+      "recallAtK": 0.7488425925925924,
+      "mrr": 0.7403549382716049,
+      "completeAtK": 0.5486111111111112
+    },
+    {
+      "searchPath": "planner default, iterative scan on",
+      "k": 10,
+      "category": "near-dup",
+      "questions": 44,
+      "distinctQuestionTexts": 12,
+      "recallAtK": 1,
+      "mrr": 0.5043831168831168,
+      "completeAtK": 1
+    },
+    {
+      "searchPath": "planner default, iterative scan on",
+      "k": 10,
+      "category": "distractor",
+      "questions": 46,
+      "distinctQuestionTexts": 12,
+      "recallAtK": 1,
+      "mrr": 0.7210144927536233,
+      "completeAtK": 1
+    },
+    {
+      "searchPath": "planner default, iterative scan on",
+      "k": 10,
+      "category": "reference",
+      "questions": 192,
+      "distinctQuestionTexts": 48,
+      "recallAtK": 0.9739583333333334,
+      "mrr": 0.6820188492063491,
+      "completeAtK": 0.9791666666666666
+    }
+  ],
+  "aboveRole": [
+    {
+      "searchPath": "exact search (index scans off)",
+      "k": 5,
+      "probes": 384,
+      "forbiddenGoldReturned": 0,
+      "probesWithFullResultSet": 384
+    },
+    {
+      "searchPath": "exact search (index scans off)",
+      "k": 10,
+      "probes": 384,
+      "forbiddenGoldReturned": 0,
+      "probesWithFullResultSet": 384
+    },
+    {
+      "searchPath": "HNSW forced, iterative scan on",
+      "k": 5,
+      "probes": 384,
+      "forbiddenGoldReturned": 0,
+      "probesWithFullResultSet": 384
+    },
+    {
+      "searchPath": "HNSW forced, iterative scan on",
+      "k": 10,
+      "probes": 384,
+      "forbiddenGoldReturned": 0,
+      "probesWithFullResultSet": 384
+    },
+    {
+      "searchPath": "planner default, iterative scan on",
+      "k": 5,
+      "probes": 384,
+      "forbiddenGoldReturned": 0,
+      "probesWithFullResultSet": 384
+    },
+    {
+      "searchPath": "planner default, iterative scan on",
+      "k": 10,
+      "probes": 384,
+      "forbiddenGoldReturned": 0,
+      "probesWithFullResultSet": 384
+    }
+  ],
+  "schema": "mtra-quality-ollama-results/1",
+  "generatedAtUtc": "2026-10-15T10:25:51.8213693+00:00",
+  "gitSha": "8716e87679c2cd69cd3a32512308d614e98c21ac",
+  "label": "RETRIEVAL QUALITY with REAL embeddings (Ollama) for ingest and query, on the HARD synthetic corpus (near-duplicates across and within tenants, distractors, paraphrases, multi-chunk answers, above-role questions). Chat is the fake LLM. Synthetic and generated: read these numbers as \u0027this model on this corpus\u0027, not as a general claim.",
+  "embeddingModel": "nomic-embed-text",
+  "embeddingDimension": 768,
+  "embeddingProvider": "Ollama",
+  "ollamaVersion": "0.40.4",
+  "ollamaHostNote": "Ollama at localhost, CPU inference unless the host has a GPU; hardware below is the test runner\u0027s.",
+  "chatProvider": "Fake (deterministic; chat is not part of retrieval quality)",
+  "corpusSeed": 42,
+  "tenants": 2,
+  "documents": 512,
+  "baseCorpusChunks": 1910,
+  "distinctChunkTextsEmbedded": 1828,
+  "totalChunksInTableAtMeasurement": 4503,
+  "hostileRowsNote": "2593 extra rows in 3 hostile tenants (fake hash vectors, never the target of a labelled question) are also in the chunks table, as in the leakage suite; they are invisible to the labelled callers under RLS.",
+  "labelledQuestions": 768,
+  "distinctQuestionTexts": 192,
+  "chunkingParameters": "fixed-window-chars, whitespace-snap, no trimming; size=500 chars; overlap=100 chars; wordSnapWindow=80 chars",
+  "environment": {
+    "os": "Ubuntu 24.04.5 LTS",
+    "cpu": "AMD EPYC 7763 64-Core Processor",
+    "logicalCores": 4,
+    "totalMemoryGiB": 15.6,
+    "runtime": ".NET 9.0.21",
+    "postgres": "PostgreSQL 16.15 (Debian 16.15-1.pgdg12\u002B2) on x86_64-pc-linux-gnu, compiled by gcc (Debian 12.2.0-14\u002Bdeb12u1) 12.2.0, 64-bit",
+    "pgvector": "0.8.7",
+    "databaseLocation": "on the same machine as the test runner (CI service container or local)",
+    "ci": true
+  },
+  "runner": "GitHub Actions runner \u0027GitHub Actions 1000000815\u0027 (RUNNER_OS=Linux, ImageOS=ubuntu24)",
+  "ingestEmbedSeconds": 270.7,
+  "quality": [
+    {
+      "searchPath": "exact search (index scans off)",
+      "k": 5,
+      "questions": 768,
+      "recallAtK": 0.8120659722222222,
+      "mrr": 0.624956597222221
+    },
+    {
+      "searchPath": "exact search (index scans off)",
+      "k": 10,
+      "questions": 768,
+      "recallAtK": 0.9053819444444445,
+      "mrr": 0.6347728587962952
+    },
+    {
+      "searchPath": "HNSW forced, iterative scan on",
+      "k": 5,
+      "questions": 768,
+      "recallAtK": 0.7892795138888888,
+      "mrr": 0.607769097222221
+    },
+    {
+      "searchPath": "HNSW forced, iterative scan on",
+      "k": 10,
+      "questions": 768,
+      "recallAtK": 0.879123263888889,
+      "mrr": 0.6167803406084645
+    },
+    {
+      "searchPath": "planner default, iterative scan on",
+      "k": 5,
+      "questions": 768,
+      "recallAtK": 0.7892795138888888,
+      "mrr": 0.607769097222221
+    },
+    {
+      "searchPath": "planner default, iterative scan on",
+      "k": 10,
+      "questions": 768,
+      "recallAtK": 0.9053819444444445,
+      "mrr": 0.6347728587962952
+    }
+  ],
+  "indexFallbackCount": 0,
+  "indexFallbackByPath": {
+    "exact search (index scans off)": 0,
+    "HNSW forced, iterative scan on": 0,
+    "planner default, iterative scan on": 0
+  },
+  "caveats": [
+    "Embedding input is the raw chunk / question text; OllamaProvider adds no nomic task prefixes (search_document:/search_query:), so this measures the repo\u0027s provider as shipped.",
+    "The hard corpus is synthetic and generated from hand-written topic templates with a fixed seed: it is harder than the standard corpus by construction, but it is still not real documents. Do not compare with public benchmarks.",
+    "recall@k = |gold in top-k| / |gold| over ALL gold chunks (overlap duplicates of one answer sentence count separately, so this is strict); MRR@k = 1/rank of the first gold chunk in top-k, else 0; complete@k = share of questions whose every answer part has a gold chunk in top-k.",
+    "Scored questions are those whose answer the caller may see. Above-role probes have no recall: the check is that the permitted set holds no answer and that no forbidden gold chunk is returned.",
+    "Questions are scored per (tenant, role) caller against only the chunks that caller may see; the oracle asserts labels never point at forbidden chunks and that no non-gold chunk of the tenant carries the answer text.",
+    "Single run per CI job, no confidence intervals. Per-category buckets are small (12 to 72 distinct questions); treat differences of a few points as noise."
+  ]
+}

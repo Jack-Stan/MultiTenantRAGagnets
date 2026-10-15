@@ -17,7 +17,7 @@
 </div>
 
 > [!NOTE]
-> **Status: MVP built, with measured results.** The service, schema, RLS policies and the leakage harness are in this repo, and CI runs the whole harness against a real `pgvector/pgvector:pg16` container on every push. Numbers below come from [`results/`](./results/) and are stated with their caveats. Not yet done: a run with real Ollama embeddings (so retrieval *quality* is unmeasured), and a hosted deployment.
+> **Status: MVP built, with measured results.** The service, schema, RLS policies and the leakage harness are in this repo, and CI runs the whole harness against a real `pgvector/pgvector:pg16` container on every push. Numbers below come from [`results/`](./results/) and are stated with their caveats. Retrieval quality has been measured once with real Ollama embeddings on a synthetic corpus (see below, with its limits). Not yet done: a hosted deployment, and any quality claim on real documents.
 
 ---
 
@@ -121,16 +121,37 @@ The harness was built early, not last, and runs keyless in CI (fake LLM, no secr
 | 🧪 **Negative control, tenant-only policy** | **880 leaks**, all cross-role, none cross-tenant: the role clause does real work |
 | 🎯 **`returned == k`** with 2,500 hostile neighbour rows | exactly `min(k, available)` at k = 1, 5, 10, 20; with iterative scan off it returns 0 |
 | ⏱️ **p95 retrieval / end-to-end** (planner default) | 1.4 ms / 2.0 ms on 2,671 rows, fake LLM (about 0 ms), shared CI runner. Forced HNSW path: 6.2 ms / 6.9 ms |
+| 🎯 **Retrieval quality, real embeddings** (`nomic-embed-text`, hard synthetic corpus, 1,910 chunks, 192 distinct questions) | exact search: **recall@5 0.812, MRR@5 0.625**, recall@10 0.905. Forced HNSW: recall@5 0.789, MRR@5 0.608. Weakest: multi-chunk answers (only 35% complete in the top 5) and superseded editions (near-duplicate MRR@5 0.50). 0 forbidden chunks returned across 384 above-role probes per variant |
+
+### Retrieval quality, in detail
+
+Measured by the manual `quality-ollama` workflow on the `hard` corpus profile, CI run [38719470320](https://github.com/Jack-Stan/MultiTenantRAGagnets/actions/runs/38719470320) on `main`, results in [`results/quality-results-ollama-hard.md`](./results/quality-results-ollama-hard.md). Real Ollama embeddings for ingest and query, fake chat model, Postgres 16 + pgvector 0.8 on a 4-core shared runner.
+
+| Category (exact search, k = 5) | Distinct questions | recall@5 | MRR@5 | complete@5 |
+|:--|--:|--:|--:|--:|
+| keyword | 12 | 1.000 | 0.898 | 1.000 |
+| distractor | 12 | 1.000 | 0.721 | 1.000 |
+| near-duplicate (superseded editions) | 12 | 0.977 | 0.501 | 0.977 |
+| reference | 48 | 0.893 | 0.672 | 0.906 |
+| paraphrase | 72 | 0.760 | 0.492 | 0.819 |
+| multi-chunk | 36 | 0.626 | 0.733 | 0.347 |
+
+What this says: keyword and distractor questions are solved, but the embedding model does not separate a current policy from its superseded edition (the top hit is a stale edition about half the time), and answers spread across two chunks are often incomplete at k = 5. Both are retrieval-quality gaps, not leakage gaps. The standard (template) corpus scores 1.000 on every metric, which is a ceiling and not a result, so it is not quoted here.
 
 **Read these honestly:**
 
-- Embeddings in CI are a deterministic hash, with no semantics. **recall@5 = 0.345 and MRR = 0.196 (exact search; 0.310 and 0.176 on the forced HNSW path) are harness smoke values, not a retrieval-quality result.** Quality needs a run with real Ollama embeddings: trigger the manual `quality-ollama` workflow (Actions tab, "Run workflow"), or locally set `EMBEDDINGS=ollama` and `OLLAMA_URL` and run the `OllamaQualityTests` test; it writes `results/quality-results-ollama.*`, separate from the leakage results.
+- The corpus is hand-templated synthetic text with a fixed seed. It is harder than the standard corpus by construction but it is not real documents, so read the numbers as "this model on this corpus", not as a general claim or a comparison with public benchmarks.
+- Category buckets are small (12 to 72 distinct questions) and each figure is a single run per CI job with no confidence intervals. Treat differences of a few points as noise. Two earlier runs agreed to within 0.004 overall on the HNSW paths and exactly on exact search.
+- Forced HNSW sits 2 to 5 points under exact search with `returned == min(k, visible)` holding, which looks like approximation loss rather than under-return. The planner default matches HNSW at k = 5 and exact search at k = 10; this has not been investigated (likely the planner choosing differently by `LIMIT`, unverified).
+- The exact-scan fallback (added after a real under-return was found: HNSW graph builds can leave rows unreachable) fired 0 times in this run. It masks that problem rather than repairing the graph.
+- Embeddings are the raw text with no nomic task prefixes, which is how the provider ships.
+- Embeddings in the keyless CI harness are a deterministic hash with no semantics, so the **recall@5 = 0.345 / MRR = 0.196** the leakage suite also writes are harness smoke values, not a quality result. To reproduce the quality run, trigger the `quality-ollama` workflow (Actions tab, "Run workflow", `corpus: hard`), or locally set `EMBEDDINGS=ollama`, `OLLAMA_URL` and `CORPUS=hard` and run the `OllamaQualityTests` test.
 - Latency is for about 2.7k rows on a shared runner with a fake LLM. It is not a production claim and says nothing about real LLM latency.
 - Zero leaks proves the filter and database layers hold under these 200 queries. It does not cover prompt-injection distortion, which is out of scope below.
 
 ## 🗺️ Roadmap
 
-A 15-step build with a defined MVP cut line, in [`docs/IMPLEMENTATION_PLAN.md`](./docs/IMPLEMENTATION_PLAN.md). Steps 1 to 13 are done and proven in CI, including the access-change test (a revoke shows on the next query with no re-embed) and the audit-integrity test. Next: publish the real-embeddings quality run (the opt-in `quality-ollama` workflow exists; its numbers are not in this README until it has been run and reviewed).
+A 15-step build with a defined MVP cut line, in [`docs/IMPLEMENTATION_PLAN.md`](./docs/IMPLEMENTATION_PLAN.md). Steps 1 to 13 are done and proven in CI, including the access-change test (a revoke shows on the next query with no re-embed) and the audit-integrity test. The real-embeddings quality run is published above. Next: a ranking fix for superseded editions (a version or recency preference is the obvious candidate), better multi-chunk handling, and per-tenant or partial HNSW indexes so the exact-scan fallback is a safety net instead of a mask.
 
 ## 🚧 Honest threat model
 
