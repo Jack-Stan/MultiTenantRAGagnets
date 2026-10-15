@@ -13,10 +13,6 @@ on:
           - standard
           - hard
         default: standard
-  # TEMP (quality/harder-corpus only, removed before finishing): a new workflow cannot be dispatched until it is on the
-  # default branch, so push to this branch runs the hard corpus.
-  push:
-    branches: [quality/harder-corpus]
 
 permissions:
   contents: read
@@ -91,7 +87,7 @@ jobs:
         env:
           CI: "true"
           EMBEDDINGS: ollama
-          CORPUS: ${{ github.event.inputs.corpus || 'hard' }}
+          CORPUS: ${{ inputs.corpus }}
           OLLAMA_URL: http://localhost:11434
           RESULTS_DIR: ${{ github.workspace }}/results
         run: |
@@ -113,7 +109,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: quality-results-ollama-${{ github.event.inputs.corpus || 'hard' }}
+          name: quality-results-ollama${{ inputs.corpus == 'hard' && '-hard' || '' }}
           path: |
             results/quality-results-ollama*.*
             ollama.log
