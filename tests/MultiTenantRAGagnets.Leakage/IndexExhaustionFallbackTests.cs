@@ -1,5 +1,8 @@
+using System.Diagnostics.Metrics;
+using Microsoft.Extensions.Logging;
 using Npgsql;
 using Pgvector;
+using MultiTenantRAGagnets.Core.Providers;
 using MultiTenantRAGagnets.Core.Retrieval;
 using MultiTenantRAGagnets.Eval;
 using MultiTenantRAGagnets.Leakage.Harness;
@@ -67,5 +70,88 @@ public class IndexExhaustionFallbackTests(LeakageFixture fx)
             for (var i = 1; i < rows.Count; i++)
                 Assert.True(rows[i - 1].Distance <= rows[i].Distance, "fallback result is not ordered by distance");
         }
+    }
+
+    [DbFact]
+    public async Task Fallback_increments_the_counter_and_logs_counts_only()
+    {
+        const int k = 5;
+        var victim = new CallerContext(
+            HostileScenario.TenantId(HostileScenario.VictimSlug),
+            Ids.User(HostileScenario.VictimSlug, Roles.Employee),
+            Roles.Employee);
+        var log = new CapturingLogger();
+        using var meter = new FallbackMeterListener();
+        var store = new NpgsqlChunkStore(fx.AppForcedHnswDs, "off", log);
+
+        await using (var session = await store.BeginAsync(victim))
+        {
+            var rows = await session.SearchAsync(HostileScenario.QueryPoint, k, RetrievalFilterMode.AppAndRls);
+            Assert.Equal(k, rows.Count);
+        }
+
+        Assert.Equal(1, store.IndexFallbackCount);
+        Assert.Equal(1, meter.Total);
+
+        var entry = Assert.Single(log.Entries);
+        Assert.Equal(LogLevel.Warning, entry.Level);
+        Assert.Contains("RequestedK=5", entry.Message);
+        Assert.Contains("IndexRows=", entry.Message);
+        Assert.Contains($"ExactRows={k}", entry.Message);
+        // Structured counts only; the message template has no placeholder for query or chunk text.
+    }
+
+    [DbFact]
+    public async Task Normal_index_hit_does_not_increment_the_counter()
+    {
+        const int k = 5;
+        // A corpus caller with at least k visible chunks, on the data source whose index path fills k by itself.
+        var q = fx.Corpus.Questions.First(x => fx.Oracle.VisibleChunks(x.TenantSlug, x.Role).Count >= k);
+        var caller = fx.Oracle.CallerFor(q.TenantSlug, q.Role);
+        var embedding = await new FakeEmbeddingProvider().EmbedAsync(q.Text);
+
+        var log = new CapturingLogger();
+        using var meter = new FallbackMeterListener();
+        var store = new NpgsqlChunkStore(fx.AppExactDs, "strict_order", log);
+
+        await using (var session = await store.BeginAsync(caller))
+        {
+            var rows = await session.SearchAsync(embedding, k, RetrievalFilterMode.AppAndRls);
+            Assert.Equal(k, rows.Count);
+        }
+
+        Assert.Equal(0, store.IndexFallbackCount);
+        Assert.Equal(0, meter.Total);
+        Assert.Empty(log.Entries);
+    }
+
+    /// <summary>Reads the process-wide <c>retrieval.index_fallback</c> instrument, so the test proves the metric and not only the field.</summary>
+    private sealed class FallbackMeterListener : IDisposable
+    {
+        private readonly MeterListener _listener = new();
+        private long _total;
+        public long Total => Interlocked.Read(ref _total);
+
+        public FallbackMeterListener()
+        {
+            _listener.InstrumentPublished = (inst, l) =>
+            {
+                if (inst.Meter.Name == RetrievalMetrics.MeterName && inst.Name == RetrievalMetrics.IndexFallbackInstrument)
+                    l.EnableMeasurementEvents(inst);
+            };
+            _listener.SetMeasurementEventCallback<long>((_, value, _, _) => Interlocked.Add(ref _total, value));
+            _listener.Start();
+        }
+
+        public void Dispose() => _listener.Dispose();
+    }
+
+    private sealed class CapturingLogger : ILogger
+    {
+        public List<(LogLevel Level, string Message)> Entries { get; } = [];
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+            => Entries.Add((logLevel, formatter(state, exception)));
     }
 }

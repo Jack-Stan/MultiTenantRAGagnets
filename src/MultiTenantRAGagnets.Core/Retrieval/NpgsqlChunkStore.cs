@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 using NpgsqlTypes;
 using Pgvector;
@@ -21,9 +23,19 @@ public sealed class NpgsqlChunkStore : IChunkStore
     private readonly NpgsqlDataSource _dataSource;
     private int _roleChecked; // 0 = not yet, 1 = verified
     private readonly string _iterativeScan;
+    private readonly ILogger _logger;
+    private long _indexFallbackCount;
+
+    /// <summary>
+    /// How many searches on THIS store instance fell back to the exact scan. Same events as the process-wide
+    /// <c>retrieval.index_fallback</c> counter, but scoped to the instance so a test or a results writer can read it.
+    /// </summary>
+    public long IndexFallbackCount => Interlocked.Read(ref _indexFallbackCount);
 
     /// <param name="dataSource">Built by <see cref="NpgsqlDataSourceFactory"/> (pgvector mapping enabled).</param>
-    public NpgsqlChunkStore(NpgsqlDataSource dataSource) : this(dataSource, "strict_order")
+    /// <param name="logger">Optional; the fallback warning goes here. Silent (null logger) when omitted.</param>
+    public NpgsqlChunkStore(NpgsqlDataSource dataSource, ILogger<NpgsqlChunkStore>? logger = null)
+        : this(dataSource, "strict_order", logger)
     {
     }
 
@@ -31,8 +43,9 @@ public sealed class NpgsqlChunkStore : IChunkStore
     /// TEST SEAM (internal): lets the tests starve the index path deterministically (iterative scan 'off') so the
     /// exact-scan fallback in <c>Session.SearchAsync</c> can be proven. Production always uses 'strict_order'.
     /// </summary>
-    internal NpgsqlChunkStore(NpgsqlDataSource dataSource, string iterativeScan)
+    internal NpgsqlChunkStore(NpgsqlDataSource dataSource, string iterativeScan, ILogger? logger = null)
     {
+        _logger = logger ?? NullLogger.Instance;
         _dataSource = dataSource ?? throw new ArgumentNullException(nameof(dataSource));
         _iterativeScan = iterativeScan is "off" or "strict_order" or "relaxed_order"
             ? iterativeScan
@@ -71,7 +84,7 @@ public sealed class NpgsqlChunkStore : IChunkStore
                 await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 
-            return new Session(connection, transaction, caller);
+            return new Session(connection, transaction, caller, this);
         }
         catch
         {
@@ -101,10 +114,12 @@ public sealed class NpgsqlChunkStore : IChunkStore
         private readonly NpgsqlConnection _connection;
         private readonly NpgsqlTransaction _transaction;
         private readonly CallerContext _caller;
+        private readonly NpgsqlChunkStore _store;
         private bool _committed;
 
-        public Session(NpgsqlConnection connection, NpgsqlTransaction transaction, CallerContext caller)
+        public Session(NpgsqlConnection connection, NpgsqlTransaction transaction, CallerContext caller, NpgsqlChunkStore store)
         {
+            _store = store;
             _connection = connection;
             _transaction = transaction;
             _caller = caller;
@@ -133,7 +148,16 @@ public sealed class NpgsqlChunkStore : IChunkStore
             await SetIndexScanAsync("off", cancellationToken).ConfigureAwait(false);
             try
             {
-                return await RunSearchAsync(filtered, queryEmbedding, k, cancellationToken).ConfigureAwait(false);
+                var exact = await RunSearchAsync(filtered, queryEmbedding, k, cancellationToken).ConfigureAwait(false);
+
+                // Observable by design: a silent fallback hides a degraded index. Counts and ids only; never the
+                // query text, the embedding or any chunk text. TenantId is a GUID (the same value is in audit_log).
+                Interlocked.Increment(ref _store._indexFallbackCount);
+                RetrievalMetrics.RecordIndexFallback();
+                _store._logger.LogWarning(
+                    "Retrieval index fallback: index path under-filled, exact scan used. TenantId={TenantId} Mode={Mode} RequestedK={RequestedK} IndexRows={IndexRows} ExactRows={ExactRows}",
+                    _caller.TenantId, mode, k, results.Count, exact.Count);
+                return exact;
             }
             finally
             {

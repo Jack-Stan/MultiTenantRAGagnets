@@ -98,6 +98,15 @@ public sealed class OllamaQualityResults
     public string Runner { get; set; } = "";
     public double IngestEmbedSeconds { get; set; }
     public List<QualityRow> Quality { get; set; } = [];
+
+    /// <summary>
+    /// Total times the store's exact-scan fallback fired during the whole run (all variants, all repeats). 0 means the
+    /// HNSW path always filled k on its own; anything above 0 means a quality number below includes exact-scan rows.
+    /// </summary>
+    public long IndexFallbackCount { get; set; }
+
+    /// <summary>Same count split by search path, so a fallback in one variant is not averaged away.</summary>
+    public Dictionary<string, long> IndexFallbackByPath { get; set; } = new();
     public List<string> Caveats { get; set; } = [];
 }
 
@@ -293,6 +302,11 @@ public sealed class OllamaQualityFixture : IAsyncLifetime
         foreach (var q in r.Quality) L($"| {q.SearchPath} | {q.K} | {q.Questions} | {F(q.RecallAtK)} | {F(q.Mrr)} |");
         if (r.Quality.Count == 0) L("| (not run) | | | | |");
         L();
+        L("## Index fallback");
+        L();
+        L($"- Exact-scan fallback fired **{r.IndexFallbackCount}** time(s) during this run (the HNSW path returned fewer than k rows and the store repeated the search as an exact scan).");
+        foreach (var (path, n) in r.IndexFallbackByPath) L($"  - {path}: {n}");
+        L();
         L("## Caveats");
         L();
         foreach (var c in r.Caveats) L($"- {c}");
@@ -361,6 +375,11 @@ public class OllamaQualityTests(OllamaQualityFixture fx)
                         Mrr = rrs.Average(),
                     });
             }
+
+            // A silent fallback must be visible in the results file. Summed over repeats; never asserted on here.
+            var fired = store.IndexFallbackCount;
+            fx.Results.IndexFallbackCount += fired;
+            fx.Results.IndexFallbackByPath[name] = fx.Results.IndexFallbackByPath.GetValueOrDefault(name) + fired;
         }
     }
 

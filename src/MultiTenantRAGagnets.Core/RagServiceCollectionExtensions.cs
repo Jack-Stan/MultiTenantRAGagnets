@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MultiTenantRAGagnets.Core.Audit;
 using MultiTenantRAGagnets.Core.Ingestion;
@@ -39,7 +40,7 @@ public static class RagServiceCollectionExtensions
 
         // Lazy: nothing connects until a request needs the database.
         services.AddSingleton(sp => NpgsqlDataSourceFactory.Create(sp.GetRequiredService<IOptions<DatabaseOptions>>().Value.AppConnectionString!));
-        services.AddSingleton<IChunkStore>(sp => new NpgsqlChunkStore(sp.GetRequiredService<NpgsqlDataSource>()));
+        services.AddSingleton<IChunkStore>(sp => new NpgsqlChunkStore(sp.GetRequiredService<NpgsqlDataSource>(), sp.GetService<ILogger<NpgsqlChunkStore>>()));
 
         services.AddScoped<CallerAccessor>();
         services.AddScoped<IChunkWriter, StoreBackedChunkWriter>();
