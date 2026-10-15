@@ -40,11 +40,11 @@ public sealed class BaitEmbeddingProvider : IEmbeddingProvider
 
 public static class ServiceFactory
 {
-    public static RetrievalService Create(IChunkStore store, IEmbeddingProvider embeddings, IChatProvider chat)
+    public static RetrievalService Create(IChunkStore store, IEmbeddingProvider embeddings, IChatProvider chat, RetrievalOptions? options = null)
     {
         // Test-only HMAC key, random per process, not a secret and never persisted.
         var audit = Options.Create(new AuditOptions { HashKey = "leakage-test-" + Guid.NewGuid().ToString("N") });
         return new RetrievalService(embeddings, chat, store, new HmacQueryHasher(audit),
-            Options.Create(new RetrievalOptions()));
+            Options.Create(options ?? new RetrievalOptions()));
     }
 }

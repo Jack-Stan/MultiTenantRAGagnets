@@ -3,7 +3,8 @@ using MultiTenantRAGagnets.Core.Providers;
 
 namespace MultiTenantRAGagnets.Core.Ingestion;
 
-public sealed record IngestRequest(Guid DocumentId, Guid TenantId, string Title, int RequiredLevel, int Version, string Text);
+/// <param name="Superseded">True when this document is a withdrawn edition (stored as documents.superseded_at). A ranking signal only: it never changes who may see the document.</param>
+public sealed record IngestRequest(Guid DocumentId, Guid TenantId, string Title, int RequiredLevel, int Version, string Text, bool Superseded = false);
 
 public sealed record IngestResult(Guid DocumentId, int ChunkCount, IReadOnlyList<Guid> ChunkIds, string ChunkingParameters);
 
@@ -56,7 +57,7 @@ public sealed class IngestionService
                 request.Version));
         }
 
-        var document = new DocumentRecord(request.DocumentId, request.TenantId, request.Title, request.RequiredLevel, request.Version);
+        var document = new DocumentRecord(request.DocumentId, request.TenantId, request.Title, request.RequiredLevel, request.Version, request.Superseded);
         await _writer.StoreAsync(document, records, cancellationToken).ConfigureAwait(false);
 
         return new IngestResult(request.DocumentId, records.Count, records.Select(r => r.Id).ToList(), ChunkingParameters.Describe());

@@ -15,7 +15,7 @@ public sealed class InMemoryChunkStore : IChunkStore
 {
     private static readonly Dictionary<string, int> Levels = new() { ["employee"] = 1, ["manager"] = 2, ["hr-admin"] = 3 };
 
-    private readonly List<(ChunkRecord Chunk, int RequiredLevel)> _chunks = [];
+    private readonly List<(ChunkRecord Chunk, int RequiredLevel, bool Superseded)> _chunks = [];
     private readonly List<AuditRecord> _audit = [];
     private long _auditId;
 
@@ -30,10 +30,17 @@ public sealed class InMemoryChunkStore : IChunkStore
     public int CommitCount { get; private set; }
     public IReadOnlyList<ChunkRecord> AllChunks => _chunks.Select(c => c.Chunk).ToList();
 
-    public void AddChunk(Guid tenantId, int requiredLevel, string text, Guid? id = null, Guid? docId = null)
+    public void AddChunk(Guid tenantId, int requiredLevel, string text, Guid? id = null, Guid? docId = null, bool superseded = false)
     {
         var doc = docId ?? Guid.NewGuid();
-        _chunks.Add((new ChunkRecord(id ?? Guid.NewGuid(), doc, tenantId, 0, text, Providers.FakeEmbeddingProvider.Embed(text), 1), requiredLevel));
+        _chunks.Add((new ChunkRecord(id ?? Guid.NewGuid(), doc, tenantId, 0, text, Providers.FakeEmbeddingProvider.Embed(text), 1), requiredLevel, superseded));
+    }
+
+    /// <summary>Adds a chunk whose embedding is exactly <paramref name="embedding"/> (to control distances in ranking tests).</summary>
+    public void AddChunkWithEmbedding(Guid tenantId, int requiredLevel, string text, float[] embedding, bool superseded = false, Guid? id = null, Guid? docId = null)
+    {
+        var doc = docId ?? Guid.NewGuid();
+        _chunks.Add((new ChunkRecord(id ?? Guid.NewGuid(), doc, tenantId, 0, text, embedding, 1), requiredLevel, superseded));
     }
 
     public Task<IChunkStoreSession> BeginAsync(CallerContext caller, CancellationToken cancellationToken = default)
@@ -50,10 +57,10 @@ public sealed class InMemoryChunkStore : IChunkStore
         private readonly List<(DocumentRecord Doc, IReadOnlyList<ChunkRecord> Chunks)> _pendingDocs = [];
         private bool _committed;
 
-        public Task<IReadOnlyList<RetrievedChunk>> SearchAsync(float[] queryEmbedding, int k, RetrievalFilterMode mode, CancellationToken cancellationToken = default)
+        public Task<IReadOnlyList<RetrievedChunk>> SearchAsync(float[] queryEmbedding, int k, RetrievalFilterMode mode, RankingPreference ranking, CancellationToken cancellationToken = default)
         {
             var callerLevel = LevelOf(caller.Role);
-            IEnumerable<(ChunkRecord Chunk, int RequiredLevel)> rows = store._chunks;
+            IEnumerable<(ChunkRecord Chunk, int RequiredLevel, bool Superseded)> rows = store._chunks;
 
             // RLS wall: tenant AND role, one combined policy. Fail-closed on unknown role.
             if (store.RlsActive)
@@ -63,12 +70,14 @@ public sealed class InMemoryChunkStore : IChunkStore
             if (mode == RetrievalFilterMode.AppAndRls && !store.IgnoreTenantFilterEvenWhenAsked)
                 rows = rows.Where(r => r.Chunk.TenantId == caller.TenantId && callerLevel is { } cl && r.RequiredLevel <= cl);
 
-            var result = rows
-                .Select(r => new RetrievedChunk(r.Chunk.Id, r.Chunk.DocId, r.Chunk.TenantId, r.Chunk.Text, CosineDistance(queryEmbedding, r.Chunk.Embedding)))
+            // Mirrors the SQL: candidates are the permitted rows nearest first (pool size k, or k * multiplier with the
+            // preference), then the preference reorders that pool and cuts it to k. It cannot add a row.
+            var pool = rows
+                .Select(r => new RetrievedChunk(r.Chunk.Id, r.Chunk.DocId, r.Chunk.TenantId, r.Chunk.Text, CosineDistance(queryEmbedding, r.Chunk.Embedding), r.Superseded))
                 .OrderBy(c => c.Distance)
-                .Take(k)
+                .Take(ranking.CandidateCount(k))
                 .ToList();
-            return Task.FromResult<IReadOnlyList<RetrievedChunk>>(result);
+            return Task.FromResult(ranking.Rerank(pool, k));
         }
 
         public Task AppendAuditAsync(AuditEntry entry, CancellationToken cancellationToken = default)
@@ -101,7 +110,7 @@ public sealed class InMemoryChunkStore : IChunkStore
             foreach (var (doc, chunks) in _pendingDocs)
             {
                 store._chunks.RemoveAll(c => c.Chunk.DocId == doc.Id);
-                store._chunks.AddRange(chunks.Select(c => (c, doc.RequiredLevel)));
+                store._chunks.AddRange(chunks.Select(c => (c, doc.RequiredLevel, doc.Superseded)));
             }
             store.CommitCount++;
             _committed = true;

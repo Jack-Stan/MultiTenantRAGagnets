@@ -126,13 +126,21 @@ public sealed class NpgsqlChunkStore : IChunkStore
         }
 
         public async Task<IReadOnlyList<RetrievedChunk>> SearchAsync(
-            float[] queryEmbedding, int k, RetrievalFilterMode mode, CancellationToken cancellationToken = default)
+            float[] queryEmbedding, int k, RetrievalFilterMode mode, RankingPreference ranking, CancellationToken cancellationToken = default)
         {
             ArgumentNullException.ThrowIfNull(queryEmbedding);
+            ArgumentNullException.ThrowIfNull(ranking);
             if (k < 1) throw new ArgumentOutOfRangeException(nameof(k));
+            ranking.Validate();
 
+            // With the current-edition preference the nearest candidates are over-fetched (k * multiplier) through the
+            // same permitted-only predicate and index path, then re-ordered in SQL and cut back to k. The pool is the
+            // caller's permitted chunks either way; the preference only changes the order inside it.
             var filtered = mode == RetrievalFilterMode.AppAndRls;
-            var results = await RunSearchAsync(filtered, queryEmbedding, k, cancellationToken).ConfigureAwait(false);
+            var results = await RunSearchAsync(filtered, queryEmbedding, k, ranking, cancellationToken).ConfigureAwait(false);
+
+            // The under-return guard is unchanged and still keyed on k, not on the pool size: the re-ranked result is
+            // min(k, pool), so "fewer than k" still means "the index path under-filled" and takes the exact scan.
             if (results.Count >= k) return results;
 
             // Under-fill. Either the caller really can see fewer than k chunks (then the exact scan below returns the
@@ -148,7 +156,7 @@ public sealed class NpgsqlChunkStore : IChunkStore
             await SetIndexScanAsync("off", cancellationToken).ConfigureAwait(false);
             try
             {
-                var exact = await RunSearchAsync(filtered, queryEmbedding, k, cancellationToken).ConfigureAwait(false);
+                var exact = await RunSearchAsync(filtered, queryEmbedding, k, ranking, cancellationToken).ConfigureAwait(false);
 
                 // Observable by design: a silent fallback hides a degraded index. Counts and ids only; never the
                 // query text, the embedding or any chunk text. TenantId is a GUID (the same value is in audit_log).
@@ -172,11 +180,21 @@ public sealed class NpgsqlChunkStore : IChunkStore
             await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        private async Task<List<RetrievedChunk>> RunSearchAsync(bool filtered, float[] queryEmbedding, int k, CancellationToken cancellationToken)
+        private async Task<List<RetrievedChunk>> RunSearchAsync(
+            bool filtered, float[] queryEmbedding, int k, RankingPreference ranking, CancellationToken cancellationToken)
         {
-            await using var cmd = new NpgsqlCommand(filtered ? RetrievalSql.FilteredSearch : RetrievalSql.RlsOnlySearch, _connection, _transaction);
+            var prefer = ranking.PreferCurrentEdition;
+            var sql = prefer
+                ? (filtered ? RetrievalSql.FilteredSearchPreferCurrent : RetrievalSql.RlsOnlySearchPreferCurrent)
+                : (filtered ? RetrievalSql.FilteredSearch : RetrievalSql.RlsOnlySearch);
+            await using var cmd = new NpgsqlCommand(sql, _connection, _transaction);
             cmd.Parameters.AddWithValue("q", new Vector(queryEmbedding));
             cmd.Parameters.AddWithValue("k", NpgsqlDbType.Integer, k);
+            if (prefer)
+            {
+                cmd.Parameters.AddWithValue("n", NpgsqlDbType.Integer, ranking.CandidateCount(k));
+                cmd.Parameters.AddWithValue("penalty", NpgsqlDbType.Double, ranking.SupersededPenalty);
+            }
             if (filtered)
             {
                 cmd.Parameters.AddWithValue("tenant", NpgsqlDbType.Uuid, _caller.TenantId);
@@ -188,7 +206,8 @@ public sealed class NpgsqlChunkStore : IChunkStore
             while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             {
                 results.Add(new RetrievedChunk(
-                    reader.GetGuid(0), reader.GetGuid(1), reader.GetGuid(2), reader.GetString(3), reader.GetDouble(4)));
+                    reader.GetGuid(0), reader.GetGuid(1), reader.GetGuid(2), reader.GetString(3), reader.GetDouble(4),
+                    Superseded: prefer && reader.GetBoolean(5)));
             }
             return results;
         }
@@ -262,15 +281,19 @@ public sealed class NpgsqlChunkStore : IChunkStore
             // caller's and required_level to <= the caller's level.
             await using (var cmd = new NpgsqlCommand(
                 """
-                INSERT INTO documents (id, tenant_id, title, required_level, version)
-                VALUES (@id, @tenant, @title, @level, @version)
+                INSERT INTO documents (id, tenant_id, title, required_level, version, superseded_at)
+                VALUES (@id, @tenant, @title, @level, @version, CASE WHEN @superseded THEN now() END)
                 ON CONFLICT (id) DO UPDATE
                    SET title = EXCLUDED.title,
                        required_level = EXCLUDED.required_level,
                        version = EXCLUDED.version,
+                       -- keep the original withdrawal time while the document stays superseded; re-ingest without the
+                       -- flag makes it current again (replace semantics, same as the chunks)
+                       superseded_at = CASE WHEN @superseded THEN coalesce(documents.superseded_at, now()) END,
                        updated_at = now()
                 """, _connection, _transaction))
             {
+                cmd.Parameters.AddWithValue("superseded", NpgsqlDbType.Boolean, document.Superseded);
                 cmd.Parameters.AddWithValue("id", NpgsqlDbType.Uuid, document.Id);
                 cmd.Parameters.AddWithValue("tenant", NpgsqlDbType.Uuid, document.TenantId);
                 cmd.Parameters.AddWithValue("title", NpgsqlDbType.Text, document.Title);
@@ -354,6 +377,46 @@ internal static class RetrievalSql
         WHERE c.tenant_id = @tenant
           AND rag_level_allows(rag_role_level(@role), d.required_level)
         ORDER BY c.embedding <=> @q
+        LIMIT @k
+        """;
+
+    // Current-edition preference (RankingPreference). The inner query is EXACTLY FilteredSearch with LIMIT @n instead of
+    // LIMIT @k: same join, same tenant + role predicate, same ORDER BY on the bare distance, so the HNSW index path and
+    // the iterative scan are used as before and the candidate pool is permitted-only. The outer query only orders and
+    // truncates that pool; it reads no table, so it cannot add a row. Superseded gets +@penalty on its distance
+    // (>= 2 is strict); ties prefer current, then the nearer, then id for a deterministic order.
+    public const string FilteredSearchPreferCurrent = """
+        SELECT cand.id, cand.doc_id, cand.tenant_id, cand.text, cand.distance, cand.superseded
+        FROM (
+            SELECT c.id, c.doc_id, c.tenant_id, c.text,
+                   (c.embedding <=> @q)::float8 AS distance,
+                   (d.superseded_at IS NOT NULL) AS superseded
+            FROM chunks c
+            JOIN documents d ON d.id = c.doc_id AND d.tenant_id = c.tenant_id
+            WHERE c.tenant_id = @tenant
+              AND rag_level_allows(rag_role_level(@role), d.required_level)
+            ORDER BY c.embedding <=> @q
+            LIMIT @n
+        ) cand
+        ORDER BY cand.distance + CASE WHEN cand.superseded THEN @penalty::float8 ELSE 0::float8 END,
+                 cand.superseded, cand.distance, cand.id
+        LIMIT @k
+        """;
+
+    // TEST-ONLY twin of RlsOnlySearch for the preference: no tenant or role predicate in the candidate query, RLS is the
+    // only wall. The superseded flag is a scalar lookup that cannot filter a row (missing/hidden => false).
+    public const string RlsOnlySearchPreferCurrent = """
+        SELECT cand.id, cand.doc_id, cand.tenant_id, cand.text, cand.distance, cand.superseded
+        FROM (
+            SELECT id, doc_id, tenant_id, text,
+                   (embedding <=> @q)::float8 AS distance,
+                   coalesce((SELECT d.superseded_at IS NOT NULL FROM documents d WHERE d.id = chunks.doc_id), false) AS superseded
+            FROM chunks
+            ORDER BY embedding <=> @q
+            LIMIT @n
+        ) cand
+        ORDER BY cand.distance + CASE WHEN cand.superseded THEN @penalty::float8 ELSE 0::float8 END,
+                 cand.superseded, cand.distance, cand.id
         LIMIT @k
         """;
 

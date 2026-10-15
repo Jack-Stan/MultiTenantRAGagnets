@@ -12,6 +12,29 @@ public sealed class RetrievalOptions
     /// </summary>
     public int MaxContextChars { get; set; } = 8000;
 
+    /// <summary>
+    /// Rank chunks of a current document ahead of chunks of a withdrawn edition (documents.superseded_at) among the
+    /// chunks the caller may already see. Demotes, never hides, and never changes what is permitted. See
+    /// <see cref="RankingPreference"/>. Default off; see docs/TRD.md (ranking preference) for the measured effect.
+    /// </summary>
+    public bool PreferCurrentEdition { get; set; }
+
+    /// <summary>Over-fetch factor for <see cref="PreferCurrentEdition"/>: the pool is k times this.</summary>
+    public int CurrentEditionCandidateMultiplier { get; set; } = 4;
+
+    /// <summary>Distance added to a superseded chunk. 2.0 or more is strict (cosine distance is at most 2).</summary>
+    public double SupersededDistancePenalty { get; set; } = 2.0;
+
+    /// <summary>The ranking preference this configuration asks the store for.</summary>
+    public RankingPreference ToRankingPreference() => PreferCurrentEdition
+        ? new RankingPreference
+        {
+            PreferCurrentEdition = true,
+            CandidateMultiplier = CurrentEditionCandidateMultiplier,
+            SupersededPenalty = SupersededDistancePenalty,
+        }
+        : RankingPreference.None;
+
     /// <summary>The answer when no permitted chunk exists. The LLM is not called in that case.</summary>
     public string NoContextAnswer { get; set; } = "I could not find anything you are permitted to see that answers that.";
 }

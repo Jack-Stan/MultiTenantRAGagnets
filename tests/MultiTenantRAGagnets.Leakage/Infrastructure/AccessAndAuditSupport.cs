@@ -67,8 +67,8 @@ public sealed class SpyStore(IChunkStore inner) : IChunkStore
     {
         private bool _committed;
 
-        public Task<IReadOnlyList<RetrievedChunk>> SearchAsync(float[] q, int k, RetrievalFilterMode mode, CancellationToken ct = default) =>
-            session.SearchAsync(q, k, mode, ct);
+        public Task<IReadOnlyList<RetrievedChunk>> SearchAsync(float[] q, int k, RetrievalFilterMode mode, RankingPreference ranking, CancellationToken ct = default) =>
+            session.SearchAsync(q, k, mode, ranking, ct);
 
         public async Task AppendAuditAsync(AuditEntry entry, CancellationToken ct = default)
         {

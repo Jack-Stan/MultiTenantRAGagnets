@@ -15,6 +15,7 @@ public sealed class ModelStore : IChunkStore
 {
     private readonly SyntheticCorpus _corpus;
     private readonly List<(CorpusChunk Chunk, Guid TenantId, float[] Vector)> _rows;
+    private readonly HashSet<Guid> _superseded;
 
     /// <summary>false = the "RLS policy" is gone (negative control).</summary>
     public bool RlsActive { get; init; } = true;
@@ -28,6 +29,9 @@ public sealed class ModelStore : IChunkStore
     public ModelStore(SyntheticCorpus corpus)
     {
         _corpus = corpus;
+        _superseded = corpus.Hard is null
+            ? []
+            : corpus.Hard.DocMeta.Where(m => m.Kind == HardDocKinds.Superseded).Select(m => m.DocId).ToHashSet();
         var tenantIds = corpus.Tenants.ToDictionary(t => t.Slug, t => t.Id);
         _rows = corpus.Chunks
             .Select(c => (c, tenantIds[c.TenantSlug], FakeEmbeddingProvider.Embed(c.Text)))
@@ -39,7 +43,7 @@ public sealed class ModelStore : IChunkStore
 
     private sealed class Session(ModelStore store, CallerContext caller) : IChunkStoreSession
     {
-        public Task<IReadOnlyList<RetrievedChunk>> SearchAsync(float[] q, int k, RetrievalFilterMode mode, CancellationToken ct = default)
+        public Task<IReadOnlyList<RetrievedChunk>> SearchAsync(float[] q, int k, RetrievalFilterMode mode, RankingPreference ranking, CancellationToken ct = default)
         {
             IEnumerable<(CorpusChunk Chunk, Guid TenantId, float[] Vector)> rows = store._rows;
             if (store.RlsActive)
@@ -52,13 +56,13 @@ public sealed class ModelStore : IChunkStore
             }
 
             var take = store.CapReturnedRows is { } cap ? Math.Min(k, cap) : k;
-            IReadOnlyList<RetrievedChunk> result = rows
+            var pool = rows
                 .Select(r => (r, d: CosineDistance(q, r.Vector)))
                 .OrderBy(x => x.d)
-                .Take(take)
-                .Select(x => new RetrievedChunk(x.r.Chunk.Id, x.r.Chunk.DocId, x.r.TenantId, x.r.Chunk.Text, x.d))
+                .Take(ranking.CandidateCount(take))
+                .Select(x => new RetrievedChunk(x.r.Chunk.Id, x.r.Chunk.DocId, x.r.TenantId, x.r.Chunk.Text, x.d, store._superseded.Contains(x.r.Chunk.DocId)))
                 .ToList();
-            return Task.FromResult(result);
+            return Task.FromResult(ranking.Rerank(pool, take));
         }
 
         public Task AppendAuditAsync(AuditEntry entry, CancellationToken ct = default) => Task.CompletedTask;

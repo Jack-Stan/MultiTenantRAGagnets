@@ -17,7 +17,8 @@ Implements IMPLEMENTATION_PLAN steps 2 and 3 (see `docs/TRD.md` section 7).
 | `migrations/004_identity_role.sql` | owner/superuser | `identity_reader` login role, `rag_identity_definer` (NOLOGIN) and the `rag_resolve_user(slug, email)` SECURITY DEFINER lookup |
 | `migrations/004_identity_user_password.sh` | owner/superuser | sets `identity_reader`'s password from `IDENTITY_USER_PASSWORD`. Sorts after `004_identity_role.sql` ('r' < 'u'); keep it that way |
 | `migrations/005_write_policies.sql` | owner/superuser | replaces the `FOR ALL` policies on `documents`/`chunks` with per-command policies: READ level-based, WRITE needs hr-admin (`rag_can_write()`); `audit_log.query_text` CHECK (always NULL) |
-| `down/005_write_policies.down.sql`, `down/004_identity_role.down.sql`, `down/002_rls.down.sql`, `down/001_schema.down.sql` | owner/superuser | reverse, in that order (005 first). Destructive: dev only |
+| `migrations/006_document_supersession.sql` | owner/superuser | `documents.superseded_at` (NULL = current): a ranking signal joined at query time, never in an RLS policy; no new grant (table-level DML already covers it), writes still gated by the 005 policies |
+| `down/006_document_supersession.down.sql`, `down/005_write_policies.down.sql`, `down/004_identity_role.down.sql`, `down/002_rls.down.sql`, `down/001_schema.down.sql` | owner/superuser | reverse, in that order (006 first). Destructive: dev only |
 | `tests/` | see below | smoke checks |
 
 ### How they are applied
@@ -25,7 +26,7 @@ Implements IMPLEMENTATION_PLAN steps 2 and 3 (see `docs/TRD.md` section 7).
 Mount `db/migrations` at `/docker-entrypoint-initdb.d` on the Postgres container.
 The image runs `*.sql` and `*.sh` there in **alphabetical order, once, only when the
 data directory is empty**, as `POSTGRES_USER` (a superuser) against `POSTGRES_DB`.
-So `001` -> `002` -> `003` -> `004` -> `005`. To re-apply after a change: `docker compose down -v`
+So `001` -> `002` -> `003` -> `004` -> `005` -> `006`. To re-apply after a change: `docker compose down -v`
 (drops the volume) then up. There is no migration runner/versions table yet; if
 migrations outgrow this, move to one without changing the file contents.
 

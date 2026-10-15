@@ -122,10 +122,17 @@ public static class Seeder
         }
         await b.FlushAsync(force: true);
 
+        // Supersession is document lifecycle metadata (documents.superseded_at, migration 006), written here the way an
+        // ingest pipeline or an hr-admin would mark a withdrawn edition. It is the ranking signal for the current-edition
+        // preference; it is never read by any visibility predicate. The standard corpus has no superseded documents.
+        var supersededDocs = corpus.Hard is null
+            ? new HashSet<Guid>()
+            : corpus.Hard.DocMeta.Where(m => m.Kind == HardDocKinds.Superseded).Select(m => m.DocId).ToHashSet();
         foreach (var d in corpus.Documents)
         {
-            b.Add("INSERT INTO documents (id, tenant_id, title, required_level, version) VALUES (@id, @t, @title, @lvl, @v)",
-                ("id", d.Id), ("t", d.TenantId), ("title", d.Title), ("lvl", (short)d.RequiredLevel), ("v", d.Version));
+            b.Add("INSERT INTO documents (id, tenant_id, title, required_level, version, superseded_at) VALUES (@id, @t, @title, @lvl, @v, CASE WHEN @sup THEN now() END)",
+                ("id", d.Id), ("t", d.TenantId), ("title", d.Title), ("lvl", (short)d.RequiredLevel), ("v", d.Version),
+                ("sup", supersededDocs.Contains(d.Id)));
             await b.FlushAsync();
         }
         foreach (var (slug, level) in new[] { (HostileScenario.NoiseSlug, 1), (HostileScenario.VictimSlug, 1), (HostileScenario.VictimSlug, 3), (HostileScenario.SmallSlug, 1) })
