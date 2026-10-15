@@ -9,6 +9,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="MultiTenantRAGagnets.Eval.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\MultiTenantRAGagnets.Core\MultiTenantRAGagnets.Core.csproj" />
   </ItemGroup>
 

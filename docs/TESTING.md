@@ -149,3 +149,28 @@ dotnet test tests/MultiTenantRAGagnets.Leakage -c Release --filter "FullyQualifi
 It ingests and queries with `OllamaProvider`, runs the same exact / forced-HNSW / planner-default paths with the same
 isolation assertions, and writes `results/quality-results-ollama.json` and `.md` (never `leakage-results.*`). Without
 `EMBEDDINGS=ollama` the test is skipped. In GitHub Actions use the manual `quality-ollama` workflow.
+
+### Hard corpus (opt-in, additive)
+
+The standard corpus (2 tenants, 24 documents, 72 chunks, 84 labelled questions of 20 distinct texts) scores 1.000 on
+every real-embedding metric: a ceiling, not a result. `CORPUS=hard` swaps in a larger, deliberately harder synthetic
+corpus for this run only (`CorpusGenerator.Generate(CorpusProfile.Hard)`, same seed rules, byte-for-byte reproducible,
+`dotnet run --project src/MultiTenantRAGagnets.Eval -- --profile hard`):
+
+- same 2 tenants and 3 roles; several hundred documents and about 1.9k chunks;
+- near-duplicates across tenants (same title, different facts) and within a tenant (four superseded editions of a policy
+  next to the current one);
+- distractor documents: guidance notes sharing the topic vocabulary, and FAQ documents that repeat the question verbatim
+  without answering it;
+- paraphrased questions that avoid the answer sentence's content words;
+- multi-chunk answers (two facts more than a chunk apart; recall needs every gold chunk);
+- questions whose answer is above the caller's role: the gold is "none permitted", the oracle states it, and the
+  run asserts no forbidden gold chunk is ever returned;
+- prompt-injection documents sharing vocabulary with real topics.
+
+Labels are checked twice: `HardCorpusTests` (Eval.Tests, no database) re-derives visibility from document levels,
+proves every gold id exists and is visible to its asker, and that the literal answer text occurs in the gold chunks and
+in no other chunk; the fixture repeats the gold-versus-manifest check at run time before any metric is computed.
+Results go to `results/quality-results-ollama-hard.json` and `.md` (overall, per category, above-role probes, fallback
+count). The standard corpus bytes are pinned in a test, so this profile cannot change them. In GitHub Actions pick
+`corpus: hard` on the `quality-ollama` workflow.

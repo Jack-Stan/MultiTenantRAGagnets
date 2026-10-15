@@ -30,6 +30,13 @@ public static class CorpusWriter
             ["manifest.json"] = Serialize(corpus.Manifest),
             ["adversarial.json"] = Serialize(corpus.AdversarialQueries),
         };
+        if (corpus.Hard is not null)
+        {
+            // Hard profile only: the standard corpus's five files stay byte-identical.
+            files["gold.json"] = Serialize(corpus.Hard.Gold);
+            files["docmeta.json"] = Serialize(corpus.Hard.DocMeta);
+        }
+
         return files;
     }
 
