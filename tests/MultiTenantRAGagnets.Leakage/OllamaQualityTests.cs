@@ -18,6 +18,8 @@ namespace MultiTenantRAGagnets.Leakage;
 ///
 ///   EMBEDDINGS=ollama   turns it on (anything else, or unset: every test here is skipped and nothing touches the DB)
 ///   OLLAMA_URL          base URL of Ollama, default http://localhost:11434
+///   CORPUS              "standard" (default, unset = same) or "hard": the additive harder corpus
+///                       (CorpusProfile.Hard). Hard writes results/quality-results-ollama-hard.* and never the standard files.
 ///   OWNER_URL / APP_URL same as the leakage suite
 ///
 /// It is a separate collection with its own fixture and its own results files (results/quality-results-ollama.*).
@@ -34,6 +36,18 @@ public static class OllamaEnv
 {
     public static bool Enabled =>
         string.Equals(Environment.GetEnvironmentVariable("EMBEDDINGS")?.Trim(), "ollama", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>CORPUS=hard selects the hard profile; unset/empty/"standard" the original corpus; anything else fails loudly.</summary>
+    public static CorpusProfile Profile
+    {
+        get
+        {
+            var v = Environment.GetEnvironmentVariable("CORPUS")?.Trim();
+            if (string.IsNullOrEmpty(v) || v.Equals("standard", StringComparison.OrdinalIgnoreCase)) return CorpusProfile.Standard;
+            if (v.Equals("hard", StringComparison.OrdinalIgnoreCase)) return CorpusProfile.Hard;
+            throw new InvalidOperationException($"CORPUS='{v}' is not recognised; use 'standard' or 'hard'.");
+        }
+    }
 
     public static string Url =>
         string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OLLAMA_URL"))
@@ -72,8 +86,60 @@ internal sealed class CachingEmbeddingProvider(IEmbeddingProvider inner) : IEmbe
     }
 }
 
+/// <summary>recall@k / MRR@k / complete@k for one (search path, k, category). Hard profile only.</summary>
+public sealed class CategoryRow
+{
+    public string SearchPath { get; set; } = "";
+    public int K { get; set; }
+    public string Category { get; set; } = "";
+    public int Questions { get; set; }
+    public int DistinctQuestionTexts { get; set; }
+    public double RecallAtK { get; set; }
+    public double Mrr { get; set; }
+
+    /// <summary>Share of questions whose every answer part (needle) has a gold chunk in the top k. Equals recall for single-chunk answers.</summary>
+    public double CompleteAtK { get; set; }
+}
+
+/// <summary>Probes whose answer is above the caller's role. There is nothing to recall; the check is that no forbidden gold comes back.</summary>
+public sealed class AboveRoleRow
+{
+    public string SearchPath { get; set; } = "";
+    public int K { get; set; }
+    public int Probes { get; set; }
+    public int ForbiddenGoldReturned { get; set; }
+    public int ProbesWithFullResultSet { get; set; }
+}
+
+public sealed class HardCorpusInfo
+{
+    public int DocumentsCurrent { get; set; }
+    public int DocumentsSuperseded { get; set; }
+    public int DocumentsDistractor { get; set; }
+    public int DocumentsNoise { get; set; }
+    public int DocumentsInjection { get; set; }
+    public int QuestionInstances { get; set; }
+    public int AnswerableInstances { get; set; }
+    public int AboveRoleInstances { get; set; }
+    public Dictionary<string, int> DistinctTextsByCategory { get; set; } = new();
+    public Dictionary<string, int> AnswerableInstancesByCategory { get; set; } = new();
+}
+
 public sealed class OllamaQualityResults
 {
+    /// <summary>"hard" for the hard run. Null (not written) for the standard run so its file keeps its original shape.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? CorpusProfile { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public HardCorpusInfo? HardCorpus { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<CategoryRow>? PerCategory { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<AboveRoleRow>? AboveRole { get; set; }
+
     public string Schema { get; set; } = "mtra-quality-ollama-results/1";
     public DateTimeOffset GeneratedAtUtc { get; set; }
     public string GitSha { get; set; } = "unknown";
@@ -136,8 +202,9 @@ public sealed class OllamaQualityFixture : IAsyncLifetime
         var provider = new OllamaProvider(_http, Options.Create(options));
         Embeddings = new CachingEmbeddingProvider(provider);
 
-        Corpus = CorpusGenerator.Generate();
+        Corpus = CorpusGenerator.Generate(OllamaEnv.Profile);
         Oracle = new CorpusOracle(Corpus);
+        Oracle.VerifyGold(); // no-op for the standard corpus; hard labels are cross-checked against the manifest here
 
         // Embed every distinct chunk text once, through the real provider. Fails loudly if Ollama is down
         // or returns the wrong dimension (OllamaProvider throws), never falls back to fake vectors.
@@ -197,10 +264,15 @@ public sealed class OllamaQualityFixture : IAsyncLifetime
         var r = Results;
         r.GeneratedAtUtc = DateTimeOffset.UtcNow;
         r.GitSha = ResultsWriter.GitSha() ?? "unknown";
-        r.Label =
-            "RETRIEVAL QUALITY with REAL embeddings (Ollama) for ingest and query. Chat is the fake LLM. " +
-            "Corpus is the repo's synthetic, template-generated corpus, not production data: read these numbers as " +
-            "'this model on this corpus', not as a general claim.";
+        var hard = Corpus.Hard is not null;
+        r.Label = hard
+            ? "RETRIEVAL QUALITY with REAL embeddings (Ollama) for ingest and query, on the HARD synthetic corpus " +
+              "(near-duplicates across and within tenants, distractors, paraphrases, multi-chunk answers, above-role questions). " +
+              "Chat is the fake LLM. Synthetic and generated: read these numbers as 'this model on this corpus', not as a general claim."
+            : "RETRIEVAL QUALITY with REAL embeddings (Ollama) for ingest and query. Chat is the fake LLM. " +
+              "Corpus is the repo's synthetic, template-generated corpus, not production data: read these numbers as " +
+              "'this model on this corpus', not as a general claim.";
+        if (hard) FillHardInfo(r);
         r.EmbeddingModel = Embeddings.ModelName;
         r.EmbeddingDimension = Embeddings.Dimension;
         r.OllamaVersion = ollamaVersion;
@@ -217,7 +289,17 @@ public sealed class OllamaQualityFixture : IAsyncLifetime
         r.ChunkingParameters = Corpus.ChunkingParameters;
         r.Environment = env;
         r.Runner = runner;
-        r.Caveats =
+        r.Caveats = hard
+        ?
+        [
+            "Embedding input is the raw chunk / question text; OllamaProvider adds no nomic task prefixes (search_document:/search_query:), so this measures the repo's provider as shipped.",
+            "The hard corpus is synthetic and generated from hand-written topic templates with a fixed seed: it is harder than the standard corpus by construction, but it is still not real documents. Do not compare with public benchmarks.",
+            "recall@k = |gold in top-k| / |gold| over ALL gold chunks (overlap duplicates of one answer sentence count separately, so this is strict); MRR@k = 1/rank of the first gold chunk in top-k, else 0; complete@k = share of questions whose every answer part has a gold chunk in top-k.",
+            "Scored questions are those whose answer the caller may see. Above-role probes have no recall: the check is that the permitted set holds no answer and that no forbidden gold chunk is returned.",
+            "Questions are scored per (tenant, role) caller against only the chunks that caller may see; the oracle asserts labels never point at forbidden chunks and that no non-gold chunk of the tenant carries the answer text.",
+            "Single run per CI job, no confidence intervals. Per-category buckets are small (12 to 72 distinct questions); treat differences of a few points as noise.",
+        ]
+        :
         [
             "Embedding input is the raw chunk / question text; OllamaProvider adds no nomic task prefixes (search_document:/search_query:), so this measures the repo's provider as shipped.",
             "The corpus is synthetic and template-generated: many questions share wording across tenants and roles, so labelled sets are far easier than real documents. Do not compare with public benchmarks.",
@@ -225,6 +307,29 @@ public sealed class OllamaQualityFixture : IAsyncLifetime
             "recall@k = |expected in top-k| / |expected|; MRR@k = 1/rank of the first expected chunk in top-k, else 0.",
             "Single run, no confidence intervals; embedding vectors are deterministic for a given model build, but model builds and CPU float differences can shift ranks slightly.",
         ];
+    }
+
+    private void FillHardInfo(OllamaQualityResults r)
+    {
+        var meta = Corpus.Hard!.DocMeta.ToDictionary(m => m.DocId);
+        int Kind(string k) => Corpus.Documents.Count(d => meta[d.Id].Kind == k);
+        var gold = Corpus.Hard.Gold;
+        r.CorpusProfile = "hard";
+        r.HardCorpus = new HardCorpusInfo
+        {
+            DocumentsCurrent = Kind(HardDocKinds.Current),
+            DocumentsSuperseded = Kind(HardDocKinds.Superseded),
+            DocumentsDistractor = Kind(HardDocKinds.Distractor),
+            DocumentsNoise = Kind(HardDocKinds.Noise),
+            DocumentsInjection = Kind(HardDocKinds.Injection),
+            QuestionInstances = gold.Count,
+            AnswerableInstances = gold.Count(g => g.AnswerPermitted),
+            AboveRoleInstances = gold.Count(g => !g.AnswerPermitted),
+            DistinctTextsByCategory = HardCategories.All.ToDictionary(c => c, c => gold.Where(g => g.Category == c).Select(g => g.Text).Distinct().Count()),
+            AnswerableInstancesByCategory = HardCategories.All.ToDictionary(c => c, c => gold.Count(g => g.AnswerPermitted && g.Category == c)),
+        };
+        r.PerCategory = [];
+        r.AboveRole = [];
     }
 
     public async Task DisposeAsync()
@@ -235,8 +340,9 @@ public sealed class OllamaQualityFixture : IAsyncLifetime
             Results.TotalChunksInTableAtMeasurement = await CountChunksAsync();
             var dir = ResultsWriter.FindResultsDirectory();
             Directory.CreateDirectory(dir);
-            var jsonPath = Path.Combine(dir, "quality-results-ollama.json");
-            var mdPath = Path.Combine(dir, "quality-results-ollama.md");
+            var stem = Results.CorpusProfile == "hard" ? "quality-results-ollama-hard" : "quality-results-ollama";
+            var jsonPath = Path.Combine(dir, stem + ".json");
+            var mdPath = Path.Combine(dir, stem + ".md");
             var utf8 = new UTF8Encoding(false);
             var json = new JsonSerializerOptions
             {
@@ -246,7 +352,7 @@ public sealed class OllamaQualityFixture : IAsyncLifetime
                 DefaultIgnoreCondition = JsonIgnoreCondition.Never,
             };
             File.WriteAllText(jsonPath, JsonSerializer.Serialize(Results, json) + "\n", utf8);
-            File.WriteAllText(mdPath, Markdown(Results), utf8);
+            File.WriteAllText(mdPath, Markdown(Results, stem), utf8);
             Console.WriteLine($"Ollama quality results written: {jsonPath} and {mdPath}");
         }
         finally
@@ -266,7 +372,7 @@ public sealed class OllamaQualityFixture : IAsyncLifetime
         return (long)(await cmd.ExecuteScalarAsync())!;
     }
 
-    private static string Markdown(OllamaQualityResults r)
+    private static string Markdown(OllamaQualityResults r, string stem)
     {
         var inv = CultureInfo.InvariantCulture;
         var sb = new StringBuilder();
@@ -275,7 +381,7 @@ public sealed class OllamaQualityFixture : IAsyncLifetime
 
         L("# Retrieval quality with real embeddings (Ollama)");
         L();
-        L($"Generated {r.GeneratedAtUtc:yyyy-MM-dd HH:mm:ss}Z, git `{r.GitSha}`. Machine-readable copy: `quality-results-ollama.json`.");
+        L($"Generated {r.GeneratedAtUtc:yyyy-MM-dd HH:mm:ss}Z, git `{r.GitSha}`. Machine-readable copy: `{stem}.json`.");
         L();
         if (r.Quality.Count == 0)
         {
@@ -302,6 +408,33 @@ public sealed class OllamaQualityFixture : IAsyncLifetime
         foreach (var q in r.Quality) L($"| {q.SearchPath} | {q.K} | {q.Questions} | {F(q.RecallAtK)} | {F(q.Mrr)} |");
         if (r.Quality.Count == 0) L("| (not run) | | | | |");
         L();
+        if (r.HardCorpus is { } h)
+        {
+            L("## Hard corpus");
+            L();
+            L($"- Documents: {r.Documents} = {h.DocumentsCurrent} current, {h.DocumentsSuperseded} superseded editions, {h.DocumentsDistractor} distractor (guidance + FAQ), {h.DocumentsNoise} noise, {h.DocumentsInjection} prompt-injection.");
+            L($"- Question instances: {h.QuestionInstances} = {h.AnswerableInstances} answerable by their caller + {h.AboveRoleInstances} above the caller's role (none permitted). {r.DistinctQuestionTexts} distinct question texts.");
+            L();
+            L("| Category | Distinct texts | Answerable instances |");
+            L("|---|---|---|");
+            foreach (var (cat, n) in h.DistinctTextsByCategory) L($"| {cat} | {n} | {h.AnswerableInstancesByCategory[cat]} |");
+            L();
+            L("## recall@k, MRR@k and complete@k by category");
+            L();
+            L("| Search path | k | Category | Questions | recall@k | MRR@k | complete@k |");
+            L("|---|---|---|---|---|---|---|");
+            foreach (var c in r.PerCategory ?? []) L($"| {c.SearchPath} | {c.K} | {c.Category} | {c.Questions} | {F(c.RecallAtK)} | {F(c.Mrr)} | {F(c.CompleteAtK)} |");
+            if ((r.PerCategory ?? []).Count == 0) L("| (not run) | | | | | | |");
+            L();
+            L("## Above-role probes (answer exists, caller may not see it)");
+            L();
+            L("| Search path | k | Probes | Forbidden gold chunks returned | Probes with a full result set |");
+            L("|---|---|---|---|---|");
+            foreach (var a in r.AboveRole ?? []) L($"| {a.SearchPath} | {a.K} | {a.Probes} | {a.ForbiddenGoldReturned} | {a.ProbesWithFullResultSet} |");
+            if ((r.AboveRole ?? []).Count == 0) L("| (not run) | | | | |");
+            L();
+        }
+
         L("## Index fallback");
         L();
         L($"- Exact-scan fallback fired **{r.IndexFallbackCount}** time(s) during this run (the HNSW path returned fewer than k rows and the store repeated the search as an exact scan).");
@@ -342,7 +475,18 @@ public class OllamaQualityTests(OllamaQualityFixture fx)
             {
                 var recalls = new List<double>();
                 var rrs = new List<double>();
-                foreach (var q in fx.Corpus.Questions)
+                var byCategory = new Dictionary<string, List<(double Recall, double Rr, double Complete, string Text)>>();
+                var aboveProbes = 0;
+                var aboveLeaks = 0;
+                var aboveFull = 0;
+
+                // Standard corpus: exactly the original labelled questions. Hard corpus: every gold instance, including
+                // the ones whose answer is above the caller's role (those have no expected chunks to recall).
+                var probes = fx.Corpus.Hard is { } hardExtras
+                    ? hardExtras.Gold.Select(g => new Probe(g.Id, g.TenantSlug, g.Role, g.Category, g.Text, g.AnswerPermitted, g.PermittedGoldChunkIds, g.GoldChunkIds, g.GoldGroups)).ToList()
+                    : fx.Corpus.Questions.Select(q => new Probe(q.Id, q.TenantSlug, q.Role, "base", q.Text, true, q.ExpectedChunkIds, q.ExpectedChunkIds, [q.ExpectedChunkIds])).ToList();
+
+                foreach (var q in probes)
                 {
                     var visible = fx.Oracle.VisibleChunks(q.TenantSlug, q.Role);
                     var caller = fx.Oracle.CallerFor(q.TenantSlug, q.Role);
@@ -358,10 +502,30 @@ public class OllamaQualityTests(OllamaQualityFixture fx)
                             $"returned == min(k, visible) violated on [{name}] k={k} question={q.Id} caller={q.TenantSlug}/{q.Role}: " +
                             $"expected {Math.Min(k, visible.Count)}, got {result.RetrievedChunkIds.Count} (visible={visible.Count}).\n{diag}");
                     }
-                    Assert.All(q.ExpectedChunkIds, id => Assert.Contains(id, visible));
 
-                    recalls.Add(Stats.RecallAtK(result.RetrievedChunkIds, q.ExpectedChunkIds, k));
-                    rrs.Add(Stats.ReciprocalRank(result.RetrievedChunkIds, q.ExpectedChunkIds, k));
+                    if (!q.Permitted)
+                    {
+                        // Answer is above this caller's role: the labelled gold must be invisible, and none of it may be returned.
+                        Assert.All(q.AllGold, id => Assert.DoesNotContain(id, visible));
+                        var leaked = result.RetrievedChunkIds.Count(q.AllGold.Contains);
+                        aboveProbes++;
+                        aboveLeaks += leaked;
+                        if (result.RetrievedChunkIds.Count == Math.Min(k, visible.Count)) aboveFull++;
+                        Assert.Equal(0, leaked);
+                        continue;
+                    }
+
+                    Assert.All(q.Expected, id => Assert.Contains(id, visible));
+
+                    var recall = Stats.RecallAtK(result.RetrievedChunkIds, q.Expected, k);
+                    var rr = Stats.ReciprocalRank(result.RetrievedChunkIds, q.Expected, k);
+                    recalls.Add(recall);
+                    rrs.Add(rr);
+
+                    var topK = result.RetrievedChunkIds.Take(k).ToHashSet();
+                    var complete = q.Groups.All(grp => grp.Any(topK.Contains)) ? 1.0 : 0.0;
+                    if (!byCategory.TryGetValue(q.Category, out var list)) byCategory[q.Category] = list = [];
+                    list.Add((recall, rr, complete, q.Text));
                 }
 
                 Assert.Equal(fx.Corpus.Questions.Count, recalls.Count);
@@ -374,6 +538,34 @@ public class OllamaQualityTests(OllamaQualityFixture fx)
                         RecallAtK = recalls.Average(),
                         Mrr = rrs.Average(),
                     });
+
+                if (rep == 0 && fx.Corpus.Hard is not null)
+                {
+                    foreach (var cat in HardCategories.All.Where(byCategory.ContainsKey))
+                    {
+                        var l = byCategory[cat];
+                        fx.Results.PerCategory!.Add(new CategoryRow
+                        {
+                            SearchPath = name,
+                            K = k,
+                            Category = cat,
+                            Questions = l.Count,
+                            DistinctQuestionTexts = l.Select(x => x.Text).Distinct().Count(),
+                            RecallAtK = l.Average(x => x.Recall),
+                            Mrr = l.Average(x => x.Rr),
+                            CompleteAtK = l.Average(x => x.Complete),
+                        });
+                    }
+
+                    fx.Results.AboveRole!.Add(new AboveRoleRow
+                    {
+                        SearchPath = name,
+                        K = k,
+                        Probes = aboveProbes,
+                        ForbiddenGoldReturned = aboveLeaks,
+                        ProbesWithFullResultSet = aboveFull,
+                    });
+                }
             }
 
             // A silent fallback must be visible in the results file. Summed over repeats; never asserted on here.
@@ -382,6 +574,10 @@ public class OllamaQualityTests(OllamaQualityFixture fx)
             fx.Results.IndexFallbackByPath[name] = fx.Results.IndexFallbackByPath.GetValueOrDefault(name) + fired;
         }
     }
+
+    private sealed record Probe(
+        string Id, string TenantSlug, string Role, string Category, string Text, bool Permitted,
+        IReadOnlyList<Guid> Expected, IReadOnlyList<Guid> AllGold, IReadOnlyList<IReadOnlyList<Guid>> Groups);
 
     /// <summary>Failure-path only. Re-runs the failing query on a fresh connection of the same data source and reports facts.</summary>
     private static async Task<string> DiagnoseAsync(OllamaQualityFixture fx, NpgsqlDataSource ds, CallerContext caller, string question, int k, int rep)

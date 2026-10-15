@@ -5,6 +5,14 @@ name: quality-ollama
 # the Postgres password is generated per run and chat stays the fake LLM (no llama pull).
 on:
   workflow_dispatch:
+    inputs:
+      corpus:
+        description: "Corpus profile: standard (original template corpus) or hard (larger corpus with distractors, near-duplicates, paraphrases, multi-chunk and above-role questions)"
+        type: choice
+        options:
+          - standard
+          - hard
+        default: standard
 
 permissions:
   contents: read
@@ -79,6 +87,7 @@ jobs:
         env:
           CI: "true"
           EMBEDDINGS: ollama
+          CORPUS: ${{ inputs.corpus }}
           OLLAMA_URL: http://localhost:11434
           RESULTS_DIR: ${{ github.workspace }}/results
         run: |
@@ -90,14 +99,18 @@ jobs:
       - name: Show quality results in the job summary
         if: always()
         run: |
-          if [ -f results/quality-results-ollama.md ]; then cat results/quality-results-ollama.md >> "$GITHUB_STEP_SUMMARY"; else echo "No quality-results-ollama.md was produced." >> "$GITHUB_STEP_SUMMARY"; fi
+          found=0
+          for f in results/quality-results-ollama.md results/quality-results-ollama-hard.md; do
+            if [ -f "$f" ]; then cat "$f" >> "$GITHUB_STEP_SUMMARY"; found=1; fi
+          done
+          if [ "$found" = 0 ]; then echo "No quality-results-ollama*.md was produced." >> "$GITHUB_STEP_SUMMARY"; fi
 
       - name: Upload quality results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: quality-results-ollama
+          name: quality-results-ollama${{ inputs.corpus == 'hard' && '-hard' || '' }}
           path: |
-            results/quality-results-ollama.*
+            results/quality-results-ollama*.*
             ollama.log
           if-no-files-found: error

@@ -94,4 +94,82 @@ public sealed record SyntheticCorpus(
     IReadOnlyList<CorpusChunk> Chunks,
     IReadOnlyList<LabelledQuestion> Questions,
     IReadOnlyList<ManifestEntry> Manifest,
-    IReadOnlyList<AdversarialQuery> AdversarialQueries);
+    IReadOnlyList<AdversarialQuery> AdversarialQueries,
+    HardExtras? Hard = null)
+{
+    /// <summary>"standard" (the original template corpus) or "hard" (the additive harder corpus).</summary>
+    public string Profile => Hard is null ? "standard" : "hard";
+}
+
+/// <summary>Which corpus to build. Standard is the original and the default everywhere; Hard is opt-in.</summary>
+public enum CorpusProfile
+{
+    Standard,
+    Hard,
+}
+
+/// <summary>Question categories of the hard profile (reporting buckets).</summary>
+public static class HardCategories
+{
+    /// <summary>Plain topic, question shares keywords with the answer sentence.</summary>
+    public const string Keyword = "keyword";
+
+    /// <summary>Hand-written paraphrase that avoids the answer sentence's content words.</summary>
+    public const string Paraphrase = "paraphrase";
+
+    /// <summary>Answer is split over at least two chunks; recall needs all of them.</summary>
+    public const string MultiChunk = "multi-chunk";
+
+    /// <summary>The tenant also holds four superseded editions of the same policy; only the current edition is right.</summary>
+    public const string NearDup = "near-dup";
+
+    /// <summary>Documents that repeat the question's wording verbatim but never give the answer.</summary>
+    public const string Distractor = "distractor";
+
+    /// <summary>Reference-code lookup of the current edition among same-titled editions and guidance documents.</summary>
+    public const string Reference = "reference";
+
+    public static readonly IReadOnlyList<string> All = new[]
+    {
+        Keyword, Paraphrase, MultiChunk, NearDup, Distractor, Reference,
+    };
+}
+
+/// <summary>
+/// One labelled question as asked by one caller. GoldChunkIds are the chunks that carry the answer (all of them are
+/// needed for a multi-chunk answer) whoever asks; PermittedGoldChunkIds is the part this caller may see. When the
+/// answer document is above the caller's role AnswerPermitted is false and PermittedGoldChunkIds is empty: the
+/// correct outcome is that the permitted set does not contain the answer, and that is what the oracle states.
+/// AnswerNeedles are the literal strings that make a chunk an answer chunk; tests use them to prove no other chunk
+/// of the tenant carries the answer. GoldGroups has one group per needle (the chunks that wholly contain it): a
+/// multi-chunk answer is complete only when every group is hit, whereas overlap duplicates inside one group are
+/// interchangeable. GoldChunkIds is the union of the groups.
+/// </summary>
+public sealed record GoldLabel(
+    string Id,
+    string TenantSlug,
+    string Role,
+    string Category,
+    string Kind,
+    string Text,
+    Guid DocId,
+    IReadOnlyList<Guid> GoldChunkIds,
+    IReadOnlyList<Guid> PermittedGoldChunkIds,
+    bool AnswerPermitted,
+    IReadOnlyList<string> AnswerNeedles,
+    IReadOnlyList<IReadOnlyList<Guid>> GoldGroups);
+
+/// <summary>What a hard-corpus document is: current, superseded, distractor, noise or injection (Edition is 1-based).</summary>
+public sealed record DocMeta(Guid DocId, string TenantSlug, string TopicSlug, string Kind, int Edition);
+
+public static class HardDocKinds
+{
+    public const string Current = "current";
+    public const string Superseded = "superseded";
+    public const string Distractor = "distractor";
+    public const string Noise = "noise";
+    public const string Injection = "injection";
+}
+
+/// <summary>Extra labels and metadata that only the hard profile carries. Absent (null) for the standard corpus.</summary>
+public sealed record HardExtras(IReadOnlyList<GoldLabel> Gold, IReadOnlyList<DocMeta> DocMeta);
