@@ -111,6 +111,43 @@ public sealed class AboveRoleRow
     public int ProbesWithFullResultSet { get; set; }
 }
 
+/// <summary>
+/// One cell of the current-edition-preference comparison: the same questions, same search path and k, with the preference
+/// off or on. Preference "off" is repeated here (it equals PerCategory) so the table is self-contained.
+/// </summary>
+public sealed class RankingRow
+{
+    public string Preference { get; set; } = "";
+    public string SearchPath { get; set; } = "";
+    public int K { get; set; }
+    public string Category { get; set; } = "";
+    public int Questions { get; set; }
+    public double RecallAtK { get; set; }
+    public double Mrr { get; set; }
+    public double CompleteAtK { get; set; }
+
+    /// <summary>Mean share of the returned top-k chunks that belong to a superseded document (lower is better for current-edition questions).</summary>
+    public double SupersededShareInTopK { get; set; }
+}
+
+public sealed class RankingAboveRoleRow
+{
+    public string Preference { get; set; } = "";
+    public string SearchPath { get; set; } = "";
+    public int K { get; set; }
+    public int Probes { get; set; }
+    public int ForbiddenGoldReturned { get; set; }
+    public int ProbesWithFullResultSet { get; set; }
+}
+
+public sealed class RankingPreferenceInfo
+{
+    public string Name { get; set; } = "";
+    public bool PreferCurrentEdition { get; set; }
+    public int CandidateMultiplier { get; set; }
+    public double SupersededPenalty { get; set; }
+}
+
 public sealed class HardCorpusInfo
 {
     public int DocumentsCurrent { get; set; }
@@ -139,6 +176,20 @@ public sealed class OllamaQualityResults
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<AboveRoleRow>? AboveRole { get; set; }
+
+    /// <summary>Hard profile only. Preference off versus on, per category, per search path, per k, in the same run. Additive: older readers ignore it.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<RankingPreferenceInfo>? RankingPreferences { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<RankingRow>? RankingComparison { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<RankingAboveRoleRow>? RankingAboveRole { get; set; }
+
+    /// <summary>Questions of the extra "withdrawn-reachability" probe set (asks about the withdrawn edition), per tenant/role instance; null for the standard run.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? WithdrawnReachabilityProbes { get; set; }
 
     public string Schema { get; set; } = "mtra-quality-ollama-results/1";
     public DateTimeOffset GeneratedAtUtc { get; set; }
@@ -173,6 +224,10 @@ public sealed class OllamaQualityResults
 
     /// <summary>Same count split by search path, so a fallback in one variant is not averaged away.</summary>
     public Dictionary<string, long> IndexFallbackByPath { get; set; } = new();
+
+    /// <summary>Same count split by "search path | preference" (hard profile), so a fallback under one preference is not averaged away.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, long>? IndexFallbackByPathAndPreference { get; set; }
     public List<string> Caveats { get; set; } = [];
 }
 
@@ -330,6 +385,10 @@ public sealed class OllamaQualityFixture : IAsyncLifetime
         };
         r.PerCategory = [];
         r.AboveRole = [];
+        r.RankingPreferences = [];
+        r.RankingComparison = [];
+        r.RankingAboveRole = [];
+        r.IndexFallbackByPathAndPreference = new();
     }
 
     public async Task DisposeAsync()
@@ -435,10 +494,54 @@ public sealed class OllamaQualityFixture : IAsyncLifetime
             L();
         }
 
+        if (r.RankingComparison is { Count: > 0 } rc)
+        {
+            L("## Current-edition preference: before / after (same run)");
+            L();
+            L("Preference **off** is the previous behaviour. The others over-fetch k times the multiplier nearest PERMITTED candidates and re-order them with `distance + penalty` for chunks of a superseded document (penalty 2.0 or more is strict: every current candidate before any superseded one). The pool is produced by the unchanged tenant + role predicate and RLS, so the preference reorders and never admits a row; the 'above-role' and 'returned == min(k, visible)' assertions run for every preference.");
+            L();
+            foreach (var p in r.RankingPreferences ?? [])
+                L($"- `{p.Name}`: " + (p.PreferCurrentEdition ? $"pool = {p.CandidateMultiplier} x k, penalty {p.SupersededPenalty.ToString("0.###", inv)}" : "off"));
+            L();
+            var prefNames = (r.RankingPreferences ?? []).Select(p => p.Name).ToList();
+            foreach (var path in rc.Select(x => x.SearchPath).Distinct())
+            foreach (var k in rc.Where(x => x.SearchPath == path).Select(x => x.K).Distinct().OrderBy(x => x))
+            {
+                L($"### {path}, k = {k}: MRR@k / recall@k / complete@k / superseded share of top-k");
+                L();
+                L("| Category | Questions | " + string.Join(" | ", prefNames) + " |");
+                L("|---|---|" + string.Join("|", prefNames.Select(_ => "---")) + "|");
+                foreach (var cat in rc.Where(x => x.SearchPath == path && x.K == k).Select(x => x.Category).Distinct())
+                {
+                    var cells = prefNames.Select(pn =>
+                    {
+                        var x = rc.FirstOrDefault(y => y.SearchPath == path && y.K == k && y.Category == cat && y.Preference == pn);
+                        return x is null ? "n/a" : $"{F(x.Mrr)} / {F(x.RecallAtK)} / {F(x.CompleteAtK)} / {F(x.SupersededShareInTopK)}";
+                    });
+                    var n = rc.First(y => y.SearchPath == path && y.K == k && y.Category == cat).Questions;
+                    L($"| {cat} | {n} | " + string.Join(" | ", cells) + " |");
+                }
+                L();
+            }
+            L("### Above-role probes by preference");
+            L();
+            L("| Preference | Search path | k | Probes | Forbidden gold chunks returned | Probes with a full result set |");
+            L("|---|---|---|---|---|---|");
+            foreach (var a in r.RankingAboveRole ?? []) L($"| {a.Preference} | {a.SearchPath} | {a.K} | {a.Probes} | {a.ForbiddenGoldReturned} | {a.ProbesWithFullResultSet} |");
+            L();
+            L("Category `withdrawn-reachability` is an extra probe set built by this run (not in the corpus gold): the same topic question but asking about the withdrawn edition, gold = the fact chunk of any superseded edition. It measures whether withdrawn material is still reachable (demoted, not hidden); it does not measure which withdrawn edition is picked.");
+            L();
+        }
+
         L("## Index fallback");
         L();
         L($"- Exact-scan fallback fired **{r.IndexFallbackCount}** time(s) during this run (the HNSW path returned fewer than k rows and the store repeated the search as an exact scan).");
         foreach (var (path, n) in r.IndexFallbackByPath) L($"  - {path}: {n}");
+        if (r.IndexFallbackByPathAndPreference is { Count: > 0 } byPref)
+        {
+            L("- By search path and preference:");
+            foreach (var (key, n) in byPref) L($"  - {key}: {n}");
+        }
         L();
         L("## Caveats");
         L();
@@ -450,6 +553,24 @@ public sealed class OllamaQualityFixture : IAsyncLifetime
 [Collection(OllamaQualityCollection.Name)]
 public class OllamaQualityTests(OllamaQualityFixture fx)
 {
+    /// <summary>
+    /// The preference variants measured in one run. The first entry is the baseline (off) and feeds the original
+    /// Quality / PerCategory / AboveRole rows exactly as before; every entry, baseline included, feeds RankingComparison.
+    /// Penalties are in cosine-distance units (range 0..2); 2.0 is strict.
+    /// </summary>
+    private static readonly (string Name, RetrievalOptions Options)[] Preferences =
+    [
+        ("off", new RetrievalOptions()),
+        ("strict, pool 1xk", new RetrievalOptions { PreferCurrentEdition = true, CurrentEditionCandidateMultiplier = 1, SupersededDistancePenalty = 2.0 }),
+        ("strict, pool 4xk", new RetrievalOptions { PreferCurrentEdition = true, CurrentEditionCandidateMultiplier = 4, SupersededDistancePenalty = 2.0 }),
+        ("soft 0.05, pool 4xk", new RetrievalOptions { PreferCurrentEdition = true, CurrentEditionCandidateMultiplier = 4, SupersededDistancePenalty = 0.05 }),
+        ("soft 0.10, pool 4xk", new RetrievalOptions { PreferCurrentEdition = true, CurrentEditionCandidateMultiplier = 4, SupersededDistancePenalty = 0.10 }),
+    ];
+
+    private const string WithdrawnCategory = "withdrawn-reachability";
+    private const string AllCategory = "(all answerable)";
+    private const string AsThingsStand = "As things stand today, ";
+
     [OllamaFact]
     public async Task Recall_at_k_and_mrr_with_real_ollama_embeddings()
     {
@@ -463,28 +584,53 @@ public class OllamaQualityTests(OllamaQualityFixture fx)
             ("planner default, iterative scan on", fx.AppDs),
         };
 
+        var hard = fx.Corpus.Hard is not null;
+        // The standard corpus has no superseded documents, so the preference would be a no-op there: only the baseline runs.
+        var preferences = hard ? Preferences : Preferences.Take(1).ToArray();
+
+        var supersededDocs = hard
+            ? fx.Corpus.Hard!.DocMeta.Where(m => m.Kind == HardDocKinds.Superseded).Select(m => m.DocId).ToHashSet()
+            : [];
+        bool IsSuperseded(Guid chunkId) => fx.Oracle.ChunkById.TryGetValue(chunkId, out var ch) && supersededDocs.Contains(ch.DocId);
+
+        // Standard corpus: exactly the original labelled questions. Hard corpus: every gold instance, including
+        // the ones whose answer is above the caller's role (those have no expected chunks to recall).
+        var probes = fx.Corpus.Hard is { } hardExtras
+            ? hardExtras.Gold.Select(g => new Probe(g.Id, g.TenantSlug, g.Role, g.Category, g.Text, g.AnswerPermitted, g.PermittedGoldChunkIds, g.GoldChunkIds, g.GoldGroups)).ToList()
+            : fx.Corpus.Questions.Select(q => new Probe(q.Id, q.TenantSlug, q.Role, "base", q.Text, true, q.ExpectedChunkIds, q.ExpectedChunkIds, [q.ExpectedChunkIds])).ToList();
+
+        var withdrawn = hard ? BuildWithdrawnProbes() : [];
+        if (hard) fx.Results.WithdrawnReachabilityProbes = withdrawn.Count;
+
+        if (hard)
+        {
+            fx.Results.RankingPreferences = preferences.Select(p => new RankingPreferenceInfo
+            {
+                Name = p.Name,
+                PreferCurrentEdition = p.Options.PreferCurrentEdition,
+                CandidateMultiplier = p.Options.CurrentEditionCandidateMultiplier,
+                SupersededPenalty = p.Options.SupersededDistancePenalty,
+            }).ToList();
+        }
+
         // Diagnostic only: QUALITY_REPEAT=N replays the whole variant/question sweep N times in one process
         // (results rows are recorded once). Unset means 1, i.e. unchanged behaviour.
         var repeat = int.TryParse(Environment.GetEnvironmentVariable("QUALITY_REPEAT"), out var rp) && rp > 1 ? rp : 1;
         for (var rep = 0; rep < repeat; rep++)
         foreach (var (name, ds) in variants)
+        foreach (var (prefName, prefOptions) in preferences)
         {
+            var baseline = prefName == preferences[0].Name;
             var store = new NpgsqlChunkStore(ds);
-            var service = ServiceFactory.Create(store, fx.Embeddings, new RecordingChatProvider());
+            var service = ServiceFactory.Create(store, fx.Embeddings, new RecordingChatProvider(), prefOptions);
             foreach (var k in new[] { 5, 10 })
             {
                 var recalls = new List<double>();
                 var rrs = new List<double>();
-                var byCategory = new Dictionary<string, List<(double Recall, double Rr, double Complete, string Text)>>();
+                var byCategory = new Dictionary<string, List<(double Recall, double Rr, double Complete, string Text, double SupShare)>>();
                 var aboveProbes = 0;
                 var aboveLeaks = 0;
                 var aboveFull = 0;
-
-                // Standard corpus: exactly the original labelled questions. Hard corpus: every gold instance, including
-                // the ones whose answer is above the caller's role (those have no expected chunks to recall).
-                var probes = fx.Corpus.Hard is { } hardExtras
-                    ? hardExtras.Gold.Select(g => new Probe(g.Id, g.TenantSlug, g.Role, g.Category, g.Text, g.AnswerPermitted, g.PermittedGoldChunkIds, g.GoldChunkIds, g.GoldGroups)).ToList()
-                    : fx.Corpus.Questions.Select(q => new Probe(q.Id, q.TenantSlug, q.Role, "base", q.Text, true, q.ExpectedChunkIds, q.ExpectedChunkIds, [q.ExpectedChunkIds])).ToList();
 
                 foreach (var q in probes)
                 {
@@ -493,13 +639,14 @@ public class OllamaQualityTests(OllamaQualityFixture fx)
                     var result = await service.QueryAsync(caller, q.Text, k);
 
                     // Same security checks as the fake-embedding quality run: quality is not allowed to cost isolation.
+                    // They run for EVERY preference: a ranking preference may reorder what the caller can see, never add to it.
                     Assert.All(result.RetrievedChunkIds, id => Assert.Contains(id, visible));
                     if (Math.Min(k, visible.Count) != result.RetrievedChunkIds.Count)
                     {
                         // Assertion strength unchanged; on failure we additionally capture why (plan, GUCs, vector sanity).
                         var diag = await DiagnoseAsync(fx, ds, caller, q.Text, k, rep);
                         Assert.Fail(
-                            $"returned == min(k, visible) violated on [{name}] k={k} question={q.Id} caller={q.TenantSlug}/{q.Role}: " +
+                            $"returned == min(k, visible) violated on [{name}] preference=[{prefName}] k={k} question={q.Id} caller={q.TenantSlug}/{q.Role}: " +
                             $"expected {Math.Min(k, visible.Count)}, got {result.RetrievedChunkIds.Count} (visible={visible.Count}).\n{diag}");
                     }
 
@@ -524,12 +671,37 @@ public class OllamaQualityTests(OllamaQualityFixture fx)
 
                     var topK = result.RetrievedChunkIds.Take(k).ToHashSet();
                     var complete = q.Groups.All(grp => grp.Any(topK.Contains)) ? 1.0 : 0.0;
+                    var supShare = result.RetrievedChunkIds.Count == 0 ? 0.0 : result.RetrievedChunkIds.Count(IsSuperseded) / (double)result.RetrievedChunkIds.Count;
                     if (!byCategory.TryGetValue(q.Category, out var list)) byCategory[q.Category] = list = [];
-                    list.Add((recall, rr, complete, q.Text));
+                    list.Add((recall, rr, complete, q.Text, supShare));
                 }
 
                 Assert.Equal(fx.Corpus.Questions.Count, recalls.Count);
-                if (rep == 0)
+
+                // Extra probe set (hard profile, first repeat only): can a user still reach WITHDRAWN material? Same
+                // isolation assertions; the category is recorded in RankingComparison only, never in PerCategory.
+                if (hard && rep == 0)
+                {
+                    foreach (var w in withdrawn)
+                    {
+                        var visible = fx.Oracle.VisibleChunks(w.TenantSlug, w.Role);
+                        var caller = fx.Oracle.CallerFor(w.TenantSlug, w.Role);
+                        var result = await service.QueryAsync(caller, w.Text, k);
+                        Assert.All(result.RetrievedChunkIds, id => Assert.Contains(id, visible));
+                        Assert.Equal(Math.Min(k, visible.Count), result.RetrievedChunkIds.Count);
+                        Assert.All(w.Expected, id => Assert.Contains(id, visible));
+
+                        var rr = Stats.ReciprocalRank(result.RetrievedChunkIds, w.Expected, k);
+                        var hit = result.RetrievedChunkIds.Take(k).Any(w.Expected.Contains) ? 1.0 : 0.0;
+                        var supShare = result.RetrievedChunkIds.Count == 0 ? 0.0 : result.RetrievedChunkIds.Count(IsSuperseded) / (double)result.RetrievedChunkIds.Count;
+                        if (!byCategory.TryGetValue(WithdrawnCategory, out var list)) byCategory[WithdrawnCategory] = list = [];
+                        // recall@k column holds hit@k (any withdrawn gold chunk in the top k) for this category.
+                        list.Add((hit, rr, hit, w.Text, supShare));
+                    }
+                }
+
+                if (rep == 0 && baseline)
+                {
                     fx.Results.Quality.Add(new QualityRow
                     {
                         SearchPath = name,
@@ -538,27 +710,60 @@ public class OllamaQualityTests(OllamaQualityFixture fx)
                         RecallAtK = recalls.Average(),
                         Mrr = rrs.Average(),
                     });
+                }
 
-                if (rep == 0 && fx.Corpus.Hard is not null)
+                if (rep == 0 && hard)
                 {
-                    foreach (var cat in HardCategories.All.Where(byCategory.ContainsKey))
+                    if (baseline)
                     {
-                        var l = byCategory[cat];
-                        fx.Results.PerCategory!.Add(new CategoryRow
+                        foreach (var cat in HardCategories.All.Where(byCategory.ContainsKey))
+                        {
+                            var l = byCategory[cat];
+                            fx.Results.PerCategory!.Add(new CategoryRow
+                            {
+                                SearchPath = name,
+                                K = k,
+                                Category = cat,
+                                Questions = l.Count,
+                                DistinctQuestionTexts = l.Select(x => x.Text).Distinct().Count(),
+                                RecallAtK = l.Average(x => x.Recall),
+                                Mrr = l.Average(x => x.Rr),
+                                CompleteAtK = l.Average(x => x.Complete),
+                            });
+                        }
+
+                        fx.Results.AboveRole!.Add(new AboveRoleRow
                         {
                             SearchPath = name,
                             K = k,
-                            Category = cat,
-                            Questions = l.Count,
-                            DistinctQuestionTexts = l.Select(x => x.Text).Distinct().Count(),
-                            RecallAtK = l.Average(x => x.Recall),
-                            Mrr = l.Average(x => x.Rr),
-                            CompleteAtK = l.Average(x => x.Complete),
+                            Probes = aboveProbes,
+                            ForbiddenGoldReturned = aboveLeaks,
+                            ProbesWithFullResultSet = aboveFull,
                         });
                     }
 
-                    fx.Results.AboveRole!.Add(new AboveRoleRow
+                    // Before/after rows: every preference (the baseline included), every category, plus an overall row.
+                    var allAnswerable = HardCategories.All.Where(byCategory.ContainsKey).SelectMany(c => byCategory[c]).ToList();
+                    void AddRow(string category, List<(double Recall, double Rr, double Complete, string Text, double SupShare)> l) =>
+                        fx.Results.RankingComparison!.Add(new RankingRow
+                        {
+                            Preference = prefName,
+                            SearchPath = name,
+                            K = k,
+                            Category = category,
+                            Questions = l.Count,
+                            RecallAtK = l.Average(x => x.Recall),
+                            Mrr = l.Average(x => x.Rr),
+                            CompleteAtK = l.Average(x => x.Complete),
+                            SupersededShareInTopK = l.Average(x => x.SupShare),
+                        });
+                    foreach (var cat in HardCategories.All.Where(byCategory.ContainsKey)) AddRow(cat, byCategory[cat]);
+                    if (allAnswerable.Count > 0) AddRow(AllCategory, allAnswerable);
+                    if (byCategory.TryGetValue(WithdrawnCategory, out var wl)) AddRow(WithdrawnCategory, wl);
+
+                    fx.Results.RankingAboveRole!.Add(new RankingAboveRoleRow
                     {
+                        Preference = prefName,
                         SearchPath = name,
                         K = k,
                         Probes = aboveProbes,
@@ -572,7 +777,54 @@ public class OllamaQualityTests(OllamaQualityFixture fx)
             var fired = store.IndexFallbackCount;
             fx.Results.IndexFallbackCount += fired;
             fx.Results.IndexFallbackByPath[name] = fx.Results.IndexFallbackByPath.GetValueOrDefault(name) + fired;
+            if (fx.Results.IndexFallbackByPathAndPreference is { } byPref)
+            {
+                var key = $"{name} | {prefName}";
+                byPref[key] = byPref.GetValueOrDefault(key) + fired;
+            }
         }
+    }
+
+    /// <summary>
+    /// Questions that ask about the WITHDRAWN edition of a versioned policy: the near-duplicate question with its
+    /// "As things stand today" cue replaced by "For the withdrawn earlier edition". Gold is the fact chunk of any
+    /// superseded edition of the same topic: the answer sentence has the same template in every edition, so the
+    /// chunks of the superseded documents that match the current answer sentence with its number replaced by a
+    /// wildcard are exactly those. This is a reachability probe (is withdrawn material still returned?), not a
+    /// claim about which withdrawn edition the model should pick, and it is built here, not in the corpus gold.
+    /// </summary>
+    private List<Probe> BuildWithdrawnProbes()
+    {
+        var hard = fx.Corpus.Hard!;
+        var meta = hard.DocMeta.ToDictionary(m => m.DocId);
+        var chunksByDoc = fx.Corpus.Chunks.GroupBy(c => c.DocId).ToDictionary(g => g.Key, g => g.ToList());
+        var probes = new List<Probe>();
+
+        foreach (var g in hard.Gold.Where(x => x.Category == HardCategories.NearDup && x.AnswerPermitted && x.AnswerNeedles.Count > 0))
+        {
+            if (!g.Text.StartsWith(AsThingsStand, StringComparison.Ordinal)) continue;
+            var current = meta[g.DocId];
+            var visible = fx.Oracle.VisibleChunks(g.TenantSlug, g.Role);
+
+            var pattern = System.Text.RegularExpressions.Regex.Escape(
+                System.Text.RegularExpressions.Regex.Replace(g.AnswerNeedles[0], @"\d+", "@@NUM@@")).Replace("@@NUM@@", @"\d+");
+            var re = new System.Text.RegularExpressions.Regex(pattern, System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+            var gold = hard.DocMeta
+                .Where(m => m.Kind == HardDocKinds.Superseded && m.TenantSlug == current.TenantSlug && m.TopicSlug == current.TopicSlug)
+                .SelectMany(m => chunksByDoc[m.DocId])
+                .Where(c => re.IsMatch(c.Text) && visible.Contains(c.Id))
+                .Select(c => c.Id)
+                .OrderBy(id => id.ToString("D"), StringComparer.Ordinal)
+                .ToList();
+            if (gold.Count == 0) continue;
+
+            probes.Add(new Probe(
+                g.Id + "-withdrawn", g.TenantSlug, g.Role, WithdrawnCategory,
+                "For the withdrawn earlier edition, " + g.Text[AsThingsStand.Length..],
+                true, gold, gold, [gold]));
+        }
+        return probes;
     }
 
     private sealed record Probe(

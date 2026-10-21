@@ -1,7 +1,7 @@
 namespace MultiTenantRAGagnets.Core.Ingestion;
 
 /// <summary>The document row. Carries the ACL (required_level); chunks never do.</summary>
-public sealed record DocumentRecord(Guid Id, Guid TenantId, string Title, int RequiredLevel, int Version);
+public sealed record DocumentRecord(Guid Id, Guid TenantId, string Title, int RequiredLevel, int Version, bool Superseded = false);
 
 /// <summary>One embedded chunk, ready to store. Note: no ACL field, by design (TRD section 4).</summary>
 public sealed record ChunkRecord(

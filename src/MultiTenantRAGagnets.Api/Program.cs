@@ -151,7 +151,7 @@ app.MapPost("/ingest", async (IngestBody req, ClaimsPrincipal principal, CallerA
 
     // DocumentId is server-generated; the tenant is the token's, never the body's.
     var result = await ingestion.IngestAsync(
-        new IngestRequest(Guid.NewGuid(), caller.TenantId, req.Title ?? "", req.RequiredLevel, Version: 1, req.Text ?? ""), ct);
+        new IngestRequest(Guid.NewGuid(), caller.TenantId, req.Title ?? "", req.RequiredLevel, Version: 1, req.Text ?? "", req.Superseded), ct);
     return Results.Created($"/documents/{result.DocumentId}", result);
 })
 .RequireAuthorization(Policies.TenantAdmin)
@@ -197,7 +197,7 @@ namespace MultiTenantRAGagnets.Api
     public sealed record DevTokenResponse(string Token, int ExpiresInMinutes);
     public sealed record QueryRequest(string? Question, int? K);
     public sealed record QueryResponse(string Answer, IReadOnlyList<Guid> CitedChunkIds, string Model, int LatencyMs);
-    public sealed record IngestBody(string? Title, string? Text, int RequiredLevel);
+    public sealed record IngestBody(string? Title, string? Text, int RequiredLevel, bool Superseded = false);
 
     public static class PrincipalExtensions
     {
