@@ -174,11 +174,11 @@ Explicitly out of scope for the first shippable version:
 
 `documents.superseded_at` (migration 006, NULL = current) marks a withdrawn edition. It is a ranking signal joined at query time like `required_level`; it is never in an RLS policy, chunks carry no copy, and writes follow the 005 write policies (hr-admin of the tenant only). `RetrievalOptions.PreferCurrentEdition` (default **off**) over-fetches `k x CurrentEditionCandidateMultiplier` nearest PERMITTED candidates through the unchanged tenant + role predicate and index path, orders them by `distance + SupersededDistancePenalty` for superseded chunks, and returns k. It reorders; it cannot admit a row. The exact-scan fallback and `returned == min(k, visible)` are keyed on k and unchanged.
 
-Measured on the hard corpus with nomic-embed-text (CI runs 38731892701 and 38731903328 on `ranking/prefer-current-edition`, `results/quality-results-ollama-hard-ranking.md`), exact search, k = 5, preference off versus soft 0.05 with a 4 x k pool:
+Measured on the hard corpus with nomic-embed-text (CI run 42020161701 on `main` at `aa81fbe`, `results/quality-results-ollama-hard.md`; the numbers match the original measurement on `ranking/prefer-current-edition`, runs 38731892701 and 38731903328, except near-dup MRR@5 off 0.501 there), exact search, k = 5, preference off versus soft 0.05 with a 4 x k pool:
 
 | Category | MRR@5 off | MRR@5 on | note |
 |---|---|---|---|
-| near-dup | 0.501 | 0.985 | superseded share of top-5 0.795 to 0.755 (still returned, ranked after current) |
+| near-dup | 0.499 | 0.985 | superseded share of top-5 0.795 to 0.755 (still returned, ranked after current) |
 | paraphrase | 0.492 | 0.585 | withdrawn editions were noise for these too |
 | reference | 0.672 | 0.734 | |
 | keyword, distractor, multi-chunk | 0.898, 0.721, 0.733 | 0.898, 0.721, 0.735 | unchanged |
