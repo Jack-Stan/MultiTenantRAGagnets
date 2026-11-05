@@ -167,7 +167,15 @@ What this says: keyword and distractor questions are solved, but the embedding m
 
 ## 🗺️ Roadmap
 
-A 15-step build with a defined MVP cut line, in [`docs/IMPLEMENTATION_PLAN.md`](./docs/IMPLEMENTATION_PLAN.md). Steps 1 to 13 are done and proven in CI, including the access-change test (a revoke shows on the next query with no re-embed) and the audit-integrity test. The real-embeddings quality run is published above. Next: a ranking fix for superseded editions (a version or recency preference is the obvious candidate), better multi-chunk handling, and per-tenant or partial HNSW indexes so the exact-scan fallback is a safety net instead of a mask.
+A 15-step build with a defined MVP cut line, in [`docs/IMPLEMENTATION_PLAN.md`](./docs/IMPLEMENTATION_PLAN.md). All 15 steps are done:
+
+- **Steps 1 to 13** are proven in CI, including the access-change test (a revoke shows on the next query with no re-embed) and the audit-integrity test.
+- **Step 14, keyless CI:** every push runs the migrations and RLS smoke tests, the full leakage harness with the fake LLM, the unit tests, and the clean-clone job (compose, seed, API, smoke). No secrets are involved.
+- **Step 15:** this README, with the threat model, measured results and the summary line above.
+
+Since the MVP, an opt-in current-edition ranking preference has landed (measured above, off by default).
+
+**Next:** better multi-chunk handling (complete@5 is the weakest number above), per-tenant or partial HNSW indexes so the exact-scan fallback is a safety net instead of a mask, a hosted deployment, and any quality measurement on real documents.
 
 ## 🚧 Honest threat model
 
