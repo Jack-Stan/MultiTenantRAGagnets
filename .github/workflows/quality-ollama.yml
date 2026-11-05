@@ -105,6 +105,18 @@ jobs:
           done
           if [ "$found" = 0 ]; then echo "No quality-results-ollama*.md was produced." >> "$GITHUB_STEP_SUMMARY"; fi
 
+      - name: Print quality results into the log
+        # The artifact is the primary copy; this makes the same bytes readable from the job log
+        # (sha256 printed so a copy taken from the log can be checked against the original).
+        if: always()
+        run: |
+          for f in results/quality-results-ollama*.md results/quality-results-ollama*.json; do
+            [ -f "$f" ] || continue
+            echo "===== BEGIN $f sha256=$(sha256sum "$f" | cut -d' ' -f1)"
+            cat "$f"; echo
+            echo "===== END $f"
+          done
+
       - name: Upload quality results
         if: always()
         uses: actions/upload-artifact@v4
