@@ -1,9 +1,7 @@
 # db/ - schema, RLS, smoke tests
 
-> **UNVERIFIED.** No Postgres, Docker or psql was available when this was written.
-> None of this SQL has ever been executed. The first real run against
-> `pgvector/pgvector:pg16` is the actual test; treat every file as a draft until
-> `db/tests/run.sh` passes there.
+> Verified: CI (`.github/workflows/ci.yml`, job `db`) applies every migration to a real
+> `pgvector/pgvector:pg16` container and runs `db/tests/run.sh` on every push.
 
 Implements IMPLEMENTATION_PLAN steps 2 and 3 (see `docs/TRD.md` section 7).
 
@@ -20,6 +18,7 @@ Implements IMPLEMENTATION_PLAN steps 2 and 3 (see `docs/TRD.md` section 7).
 | `migrations/006_document_supersession.sql` | owner/superuser | `documents.superseded_at` (NULL = current): a ranking signal joined at query time, never in an RLS policy; no new grant (table-level DML already covers it), writes still gated by the 005 policies |
 | `down/006_document_supersession.down.sql`, `down/005_write_policies.down.sql`, `down/004_identity_role.down.sql`, `down/002_rls.down.sql`, `down/001_schema.down.sql` | owner/superuser | reverse, in that order (006 first). Destructive: dev only |
 | `tests/` | see below | smoke checks |
+| `seed/demo.sql` | owner/superuser | demo identities only (2 tenants x 3 roles), loaded by `scripts/demo-up.sh`. Not a migration, never auto-loaded |
 
 ### How they are applied
 

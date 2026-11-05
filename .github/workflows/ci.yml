@@ -102,3 +102,37 @@ jobs:
       # The Leakage project needs the real database and runs in the `db` job (it fails, not skips, when CI=true and
       # OWNER_URL/APP_URL are missing), so it is excluded here.
       - run: dotnet test --nologo -c Release --no-build --filter "FullyQualifiedName!~MultiTenantRAGagnets.Leakage"
+
+  clean-clone:
+    name: run from a clean clone (compose + seed + API + smoke)
+    runs-on: ubuntu-latest
+    # Proves the README "How to run" works: it runs exactly those commands, nothing else.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: cp .env.example .env and set throwaway passwords
+        run: |
+          cp .env.example .env
+          for v in POSTGRES_PASSWORD APP_USER_PASSWORD IDENTITY_USER_PASSWORD; do
+            pw="$(openssl rand -hex 16)"; echo "::add-mask::$pw"
+            sed -i "s/^$v=.*/$v=$pw/" .env
+          done
+
+      - name: ./scripts/demo-up.sh (background)
+        run: nohup ./scripts/demo-up.sh > api.log 2>&1 &
+
+      - name: ./scripts/smoke.sh
+        run: ./scripts/smoke.sh
+
+      - name: API and Postgres logs on failure
+        if: failure()
+        run: |
+          cat api.log || true
+          docker compose logs postgres || true
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
