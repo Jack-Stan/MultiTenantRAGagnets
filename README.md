@@ -107,7 +107,23 @@ Each query writes an append-only audit row. Full flow in [`docs/APP_FLOW.md`](./
 | **Embeddings + chat** | Provider abstraction: local **Ollama** by default, a deterministic **fake** for CI |
 | **Identity** | Locally issued JWT carrying `tenant` + `role` (no SSO) |
 | **Surface** | Swagger UI |
-| **Run** | `docker compose up` |
+| **Run** | `docker compose` (Postgres) + `dotnet run` (API), wrapped in `scripts/demo-up.sh` |
+
+## ▶️ How to run
+
+Needs Docker (with compose v2), the .NET 9 SDK, `openssl`, and `curl` + `jq` for the smoke script. No API key and no model download: the default provider is the deterministic fake.
+
+```bash
+cp .env.example .env        # then set POSTGRES_PASSWORD, APP_USER_PASSWORD, IDENTITY_USER_PASSWORD
+./scripts/demo-up.sh        # Postgres 16 + pgvector, demo identities, API on http://localhost:5259
+./scripts/smoke.sh          # second shell: end-to-end checks against the running API
+```
+
+`demo-up.sh` starts Postgres with `docker compose` (the migrations run on first start of an empty volume), loads [`db/seed/demo.sql`](./db/seed/demo.sql) (tenants `acme` and `globex`, users `employee@`, `manager@` and `hr-admin@<tenant>.example`), generates throwaway JWT and audit-hash keys unless `Jwt__SigningKey` / `Audit__HashKey` are set, and runs the API in Development. Swagger is at `http://localhost:5259/swagger`. Get a token with `POST /auth/dev-token` (`{"tenant":"acme","email":"hr-admin@acme.example"}`). The dev token issuer exists only in Development.
+
+`smoke.sh` checks: `/health` responds, `/query` with no token gets 401, hr-admin can ingest and an employee gets 403, an employee's query never cites a chunk from an hr-admin-only document, and another tenant's query never cites any of `acme`'s chunks. The `clean-clone` CI job runs exactly these three commands on every push.
+
+Reset the database with `docker compose down -v`. To run the full leakage harness locally, see the `db` job in [`.github/workflows/ci.yml`](./.github/workflows/ci.yml) (migrations, RLS smoke tests, then `dotnet test tests/MultiTenantRAGagnets.Leakage` with `OWNER_URL` and `APP_URL`).
 
 ## 🧪 Proof, not promises
 
